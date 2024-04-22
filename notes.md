@@ -6,10 +6,6 @@ error is similar but used specifically for parsing errors.
 Logging (LOG):
 Provided under conditional compilation (#ifdef LOGGING). It logs detailed debug information if the verbosity level is set to maximum, which is useful for development or detailed debugging.
 
-Initialization and Cleanup (init, reset):
-init sets up data structures needed for processing the CNF formula.
-reset cleans up these structures to prevent memory leaks.
-
 Formula Simplification (simplify):
 Copies original clauses to a simplified list and populates a matrix for further processing.
 
@@ -29,13 +25,10 @@ Performance Metrics: Utilizes system-specific calls to measure and report on com
 
 Logging and Debugging: Supports detailed logging for debugging purposes, though this is optional and depends on compile-time settings.
 
-Parsing Input (parse):
-Handles opening the input file or setting it to stdin.
-Reads and parses the CNF header and each clause, storing them in global structures.
-Errors in format or content during parsing lead to immediate termination with an error message.
-
 
 # Done
+
+# 1
 
 Usage Information (usage variable):
 Describes how to use the program, including its options and expected input and output formats.
@@ -49,3 +42,14 @@ Parses and handles command-line options to configure the program’s behavior (v
 
 Main Function (main):
 Orchestrates the flow of the program by parsing options, initializing the environment, processing the input, and handling outputs.
+
+# 2
+
+Parsing Input (parse):
+Handles opening the input file or setting it to stdin.
+Reads and parses the CNF header and each clause, storing them in global structures.
+Errors in format or content during parsing lead to immediate termination with an error message.
+
+Initialization and Cleanup (init, reset):
+init sets up data structures needed for processing the CNF formula.
+reset cleans up these structures to prevent memory leaks.
