@@ -9,13 +9,6 @@ Provided under conditional compilation (#ifdef LOGGING). It logs detailed debug 
 Formula Simplification (simplify):
 Copies original clauses to a simplified list and populates a matrix for further processing.
 
-Signature Calculation (signature):
-If enabled, calculates a hash-based signature of the simplified formula to ensure integrity or for other verification purposes.
-
-Output Handling (print, print function):
-Manages opening the output file or setting it to stdout.
-Outputs the simplified CNF formula and, if requested, the signature.
-
 Performance Reporting (report):
 Reports statistics like the number of subsumed clauses and processing time.
 
@@ -53,3 +46,12 @@ Errors in format or content during parsing lead to immediate termination with an
 Initialization and Cleanup (init, reset):
 init sets up data structures needed for processing the CNF formula.
 reset cleans up these structures to prevent memory leaks.
+
+# 3
+
+Signature Calculation (signature):
+If enabled, calculates a hash-based signature of the simplified formula to ensure integrity or for other verification purposes.
+
+Output Handling (print, print function):
+Manages opening the output file or setting it to stdout.
+Outputs the simplified CNF formula and, if requested, the signature.
