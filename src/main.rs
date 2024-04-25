@@ -1,6 +1,4 @@
 use clap::{App, Arg};
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng}; // Ensure rand is included in Cargo.toml
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
@@ -9,7 +7,7 @@ use std::process;
 struct CNFFormula {
     variables: usize,
     clauses: Vec<Vec<i32>>,
-    literal_map: HashMap<i32, Vec<usize>>, // Map from literal to list of clause indices
+    literal_map: HashMap<i32, Vec<usize>>,
 }
 
 impl CNFFormula {
@@ -22,7 +20,6 @@ impl CNFFormula {
         }
     }
 
-    // Adds a clause to the CNF Formula and updates the literal map.
     fn add_clause(&mut self, clause: Vec<i32>, index: usize) {
         for &literal in &clause {
             self.literal_map
@@ -33,13 +30,13 @@ impl CNFFormula {
         self.clauses.push(clause);
     }
     fn initialize_nonces() -> [u64; 16] {
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut nonces = [0u64; 16];
-        for nonce in nonces.iter_mut() {
-            *nonce = rng.gen::<u64>() | 1; // Ensure it's not zero
-        }
-        nonces
+        [
+            71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021,
+            1854614941, 647800535, 53523743, 783815875, 1643643143, 682599717, 291474505,
+            229233697, 1633529763,
+        ]
     }
+
     fn compute_signature(&self) -> u64 {
         let nonces = Self::initialize_nonces();
         let mut hash: u64 = 0;
@@ -64,12 +61,10 @@ impl CNFFormula {
     }
 }
 
-// Simplifies the CNF formula (placeholder for now).
-fn simplify_formula(formula: &mut CNFFormula) {
-    // This will contain logic to simplify the CNF formula.
-}
+// fn simplify_formula(formula: &mut CNFFormula) {
+//     // This will contain logic to simplify the CNF formula.
+// }
 
-// Configuration structure for the application settings.
 struct Config {
     input_path: String,
     output_path: String,
@@ -77,7 +72,6 @@ struct Config {
     sign: bool,
 }
 
-// Parses the CNF file and constructs a CNF formula object.
 fn parse_cnf(input_path: &str) -> io::Result<CNFFormula> {
     let input_file = File::open(input_path)?;
     let reader = BufReader::new(input_file);
@@ -90,7 +84,7 @@ fn parse_cnf(input_path: &str) -> io::Result<CNFFormula> {
     while let Some(line) = lines.next() {
         let line = line?;
         if line.starts_with('c') {
-            continue; // Skip comments
+            continue;
         }
         if line.starts_with("p cnf") {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -107,6 +101,10 @@ fn parse_cnf(input_path: &str) -> io::Result<CNFFormula> {
                 process::exit(1);
             });
             header_parsed = true;
+            println!(
+                "c parsed 'p cnf {} {}' header",
+                formula.variables, _clauses_count
+            );
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
@@ -128,6 +126,16 @@ fn parse_cnf(input_path: &str) -> io::Result<CNFFormula> {
     Ok(formula)
 }
 
+fn print_cnf(formula: &CNFFormula) {
+    println!("p cnf {} {}", formula.variables, formula.clauses.len());
+    for clause in &formula.clauses {
+        for literal in clause {
+            print!("{} ", literal);
+        }
+        println!("0");
+    }
+}
+
 fn main() {
     let matches = App::new("BabySub")
         .version("1.0")
@@ -136,13 +144,13 @@ fn main() {
         .arg(
             Arg::with_name("input")
                 .help("Sets the input file to use")
-                .required(true)
+                .required(false)
                 .index(1),
         )
         .arg(
             Arg::with_name("output")
                 .help("Sets the output file to use")
-                .required(true)
+                .required(false)
                 .index(2),
         )
         .arg(
@@ -172,30 +180,20 @@ fn main() {
         sign: matches.is_present("sign"),
     };
 
-    println!("input_path: {}", config.input_path);
-    println!("output_path: {}", config.output_path);
-    println!("verbosity: {}", config.verbosity);
-    println!("sign: {}", config.sign);
+    println!("c BabySub Subsumption Preprocessor");
+    println!("c reading from {}", config.input_path);
 
-    // Parse the CNF file and initialize the formula variable.
-    let mut formula = parse_cnf(&config.input_path).unwrap_or_else(|err| {
+    let formula = parse_cnf(&config.input_path).unwrap_or_else(|err| {
         eprintln!("Failed to parse CNF file: {}", err);
         process::exit(1);
     });
 
-    // Print parsed data for verbosity or debugging.
-    println!("Variables: {}", formula.variables);
-    println!("Clauses:");
-    for (index, clause) in formula.clauses.iter().enumerate() {
-        println!("{}: {:?}", index, clause);
-    }
-    println!("Literal Map:");
-    for (literal, indices) in &formula.literal_map {
-        println!("{} appears in clauses: {:?}", literal, indices);
+    if config.sign {
+        let signature = formula.compute_signature();
+        println!("c hash-signature: {}", signature);
     }
 
-    // Simplify the CNF formula
-    simplify_formula(&mut formula);
-    let signature = formula.compute_signature();
-    println!("Signature: {signature}");
+    if config.verbosity > 0 {
+        print_cnf(&formula);
+    }
 }
