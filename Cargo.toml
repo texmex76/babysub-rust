@@ -8,3 +8,7 @@ edition = "2021"
 [dependencies]
 clap = "*"
 rand = "*"
+
+[dev-dependencies]
+assert_cmd = "*"
+predicates = "*"

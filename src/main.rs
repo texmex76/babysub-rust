@@ -47,7 +47,7 @@ impl CNFFormula {
         for clause in &self.clauses {
             let mut d = clause.clone();
             d.sort_unstable();
-            let mut tmp = (d.len() as u64 + 1) * nonces[0];
+            let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
             let mut i = 1usize;
 
             for &ulit in &d {
