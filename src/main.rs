@@ -1,4 +1,4 @@
-use clap::{App, Arg, ArgAction};
+use clap::{Arg, ArgAction, Command};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -29,36 +29,6 @@ impl CNFFormula {
         }
         self.clauses.push(clause);
     }
-    fn initialize_nonces() -> [u64; 16] {
-        [
-            71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021,
-            1854614941, 647800535, 53523743, 783815875, 1643643143, 682599717, 291474505,
-            229233697, 1633529763,
-        ]
-    }
-
-    fn compute_signature(&self) -> u64 {
-        let nonces = Self::initialize_nonces();
-        let mut hash: u64 = 0;
-
-        for clause in &self.clauses {
-            let mut d = clause.clone();
-            d.sort_unstable();
-            let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
-            let mut i = 1usize;
-
-            for &ulit in &d {
-                tmp = (tmp << 4) | (tmp >> 60); // Rotating bits
-                tmp = tmp.wrapping_add(ulit as u64);
-                tmp = tmp.wrapping_mul(nonces[i]);
-                i = (i + 1) % nonces.len();
-            }
-
-            hash = hash.wrapping_add(tmp);
-        }
-
-        hash
-    }
 }
 
 struct Stats {
@@ -79,7 +49,7 @@ struct SATContext {
 impl SATContext {
     fn new(config: Config) -> Self {
         let output: Box<dyn Write> = match config.output_path.as_str() {
-            "" => Box::new(io::stdout()),
+            "<stdout>" => Box::new(io::stdout()),
             path => Box::new(File::create(path).expect("Failed to create output file")),
         };
 
@@ -132,9 +102,61 @@ macro_rules! raw_message {
     }}
 }
 
-// fn simplify_formula(formula: &mut CNFFormula) {
-//     // This will contain logic to simplify the CNF formula.
-// }
+macro_rules! verbose {
+    ($ctx:expr, $level:expr, $($arg:tt)*) => {{
+        if $ctx.config.verbosity == $level {
+            use std::io::Write;
+            if let Err(e) = writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))) {
+                die!("Failed to write message: {}", e);
+            }
+            if let Err(f) = $ctx.writer.flush() {
+                die!("Failed to flush writer: {}", f);
+        }}
+    }}
+}
+
+#[cfg(feature = "logging")]
+macro_rules! LOG {
+    ($($arg:tt)*) => {{
+        println!("c LOG {}", format_args!($($arg)*));
+    }};
+}
+
+#[cfg(not(feature = "logging"))]
+macro_rules! LOG {
+    ($($arg:tt)*) => {{}};
+}
+
+fn compute_signature(ctx: &mut SATContext) -> u64 {
+    verbose!(ctx, 1, "computing hash-signature");
+    let nonces = [
+        71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021, 1854614941,
+        647800535, 53523743, 783815875, 1643643143, 682599717, 291474505, 229233697, 1633529763,
+    ];
+    let mut hash: u64 = 0;
+
+    for clause in &ctx.formula.clauses {
+        let mut d = clause.clone();
+        d.sort_unstable();
+        let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
+        let mut i = 1usize;
+
+        for &ulit in &d {
+            tmp = (tmp << 4) | (tmp >> 60); // Rotating bits
+            tmp = tmp.wrapping_add(ulit as u64);
+            tmp = tmp.wrapping_mul(nonces[i]);
+            i = (i + 1) % nonces.len();
+        }
+
+        hash = hash.wrapping_add(tmp);
+    }
+
+    hash
+}
+
+fn simplify(ctx: &mut SATContext) {
+    verbose!(ctx, 1, "starting to simplify formula");
+}
 
 struct Config {
     input_path: String,
@@ -185,7 +207,7 @@ macro_rules! parse_error {
 }
 
 fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
-    let input: Box<dyn Read> = if input_path.is_empty() {
+    let input: Box<dyn Read> = if input_path == "<stdin>" {
         message!(ctx, "reading from '<stdin>'");
         Box::new(io::stdin())
     } else {
@@ -250,12 +272,14 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
             line_number
         );
     }
+    verbose!(ctx, 1, "parsed {} clauses", ctx.stats.parsed);
     Ok(())
 }
 
-fn print_cnf(ctx: &mut SATContext) {
+fn print(ctx: &mut SATContext) {
+    verbose!(ctx, 1, "writing to '{}'", ctx.config.output_path);
     if ctx.config.sign {
-        let signature = ctx.formula.compute_signature();
+        let signature = compute_signature(ctx);
         message!(ctx, "hash-signature: {}", signature);
     }
 
@@ -277,49 +301,62 @@ fn print_cnf(ctx: &mut SATContext) {
 }
 
 fn main() {
-    let matches = App::new("BabySub")
+    let app = Command::new("BabySub")
         .version("1.0")
         .author("Bernhard Gstrein")
         .about("Processes and simplifies logical formulae in DIMACS CNF format.")
         .arg(
-            Arg::with_name("input")
+            Arg::new("input")
                 .help("Sets the input file to use")
-                .required(false)
                 .index(1),
         )
         .arg(
-            Arg::with_name("output")
+            Arg::new("output")
                 .help("Sets the output file to use")
-                .required(false)
                 .index(2),
         )
         .arg(
-            Arg::with_name("verbosity")
+            Arg::new("verbosity")
                 .short('v')
                 .action(ArgAction::Count)
                 .help("Increases verbosity level"),
         )
+        .arg(Arg::new("quiet").short('q').help("Suppresses all output"))
         .arg(
-            Arg::with_name("quiet")
-                .short('q')
-                .help("Suppresses all output"),
-        )
-        .arg(
-            Arg::with_name("sign")
+            Arg::new("sign")
                 .short('s')
                 .help("Computes and adds a hash signature to the output"),
-        )
-        .get_matches();
+        );
 
-    let quiet = matches.is_present("quiet");
-    let verbosity = if quiet {
+    #[cfg(feature = "logging")]
+    let app = app.arg(
+        Arg::new("logging")
+            .short('l')
+            .help("Enables detailed logging for debugging")
+            .action(ArgAction::SetTrue),
+    );
+
+    let matches = app.get_matches();
+
+    #[cfg(not(feature = "logging"))]
+    let verbosity = if matches.is_present("quiet") {
         -1
     } else {
         *matches.get_one::<u8>("verbosity").unwrap_or(&0) as i32
     };
+
+    #[cfg(feature = "logging")]
+    let verbosity = if quiet {
+        -1
+    } else if matches.get_flag("logging") {
+        999
+    } else {
+        *matches.get_one::<u8>("verbosity").unwrap_or(&0) as i32
+    };
+
     let config = Config {
-        input_path: matches.value_of("input").unwrap_or_default().to_string(),
-        output_path: matches.value_of("output").unwrap_or_default().to_string(),
+        input_path: matches.value_of("input").unwrap_or("<stdin>").to_string(),
+        output_path: matches.value_of("output").unwrap_or("<stdout>").to_string(),
         verbosity,
         sign: matches.is_present("sign"),
     };
@@ -331,6 +368,6 @@ fn main() {
         die!("Failed to parse CNF: {}", e);
     }
 
-    print_cnf(&mut ctx);
+    print(&mut ctx);
     report_stats(&mut ctx);
 }

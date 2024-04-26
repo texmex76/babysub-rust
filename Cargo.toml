@@ -11,3 +11,6 @@ clap = "*"
 [dev-dependencies]
 assert_cmd = "*"
 predicates = "*"
+
+[features]
+logging = []
