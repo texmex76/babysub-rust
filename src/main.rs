@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{App, Arg, ArgAction};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
@@ -91,6 +91,20 @@ impl SATContext {
     }
 }
 
+macro_rules! message {
+    ($ctx:expr, $($arg:tt)*) => {{
+        if $ctx.config.verbosity >= 0 {
+            use std::io::Write;  // Import the Write trait to access the flush method
+
+            // Write the formatted message to the writer
+            writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))).unwrap();
+
+            // Flush the writer to ensure the output is immediately visible
+            $ctx.writer.flush().unwrap();
+        }
+    }}
+}
+
 // fn simplify_formula(formula: &mut CNFFormula) {
 //     // This will contain logic to simplify the CNF formula.
 // }
@@ -126,11 +140,12 @@ fn parse_cnf(ctx: &mut SATContext) -> io::Result<()> {
                 process::exit(1);
             });
             header_parsed = true;
-            writeln!(
-                ctx.writer,
-                "c parsed 'p cnf {} {}' header",
-                ctx.formula.variables, _clauses_count
-            )?;
+            message!(
+                ctx,
+                "parsed 'p cnf {} {}' header",
+                ctx.formula.variables,
+                _clauses_count
+            );
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
@@ -182,8 +197,7 @@ fn main() {
         .arg(
             Arg::with_name("verbosity")
                 .short('v')
-                .multiple(true)
-                .takes_value(true)
+                .action(ArgAction::Count)
                 .help("Increases verbosity level"),
         )
         .arg(
@@ -198,18 +212,29 @@ fn main() {
         )
         .get_matches();
 
+    let quiet = matches.is_present("quiet");
+    let verbosity = if quiet {
+        -1
+    } else {
+        *matches.get_one::<u8>("verbosity").unwrap_or(&0) as i32
+    };
     let config = Config {
         input_path: matches.value_of("input").unwrap_or_default().to_string(),
         output_path: matches.value_of("output").unwrap_or_default().to_string(),
-        verbosity: matches.occurrences_of("verbosity") as i32
-            - matches.occurrences_of("quiet") as i32,
+        verbosity,
         sign: matches.is_present("sign"),
     };
 
     let mut ctx = SATContext::new(config);
+    message!(&mut ctx, "BabySub Subsumption Preprocessor");
 
-    writeln!(ctx.writer, "c BabySub Subsumption Preprocessor").unwrap();
-    writeln!(ctx.writer, "c reading from {}", ctx.config.input_path).unwrap();
+    // Adjusted output message for input path
+    if ctx.config.input_path.is_empty() {
+        message!(ctx, "reading from '<stdin>'"); // TODO: Print that before input from stdin
+                                                 // has arrived
+    } else {
+        message!(ctx, "reading from '{}'", ctx.config.input_path);
+    }
 
     parse_cnf(&mut ctx).unwrap_or_else(|err| {
         eprintln!("Failed to parse CNF: {}", err);
@@ -218,7 +243,7 @@ fn main() {
 
     if ctx.config.sign {
         let signature = ctx.formula.compute_signature();
-        writeln!(ctx.writer, "c hash-signature: {}", signature).unwrap();
+        message!(&mut ctx, "hash-signature: {}", signature);
     }
 
     if ctx.config.verbosity > 0 {
