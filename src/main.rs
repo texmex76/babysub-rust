@@ -5,8 +5,6 @@ use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
 use std::time::Instant;
 
-// TODO: Remove the unwrap calls and handle errors properly.
-
 struct CNFFormula {
     variables: usize,
     clauses: Vec<Vec<i32>>,
@@ -14,7 +12,6 @@ struct CNFFormula {
 }
 
 impl CNFFormula {
-    // Initializes a new CNF Formula.
     fn new() -> CNFFormula {
         CNFFormula {
             variables: 0,
@@ -101,30 +98,36 @@ impl SATContext {
     }
 }
 
+macro_rules! die {
+    ($($arg:tt)*) => {{
+        eprintln!("babysub: error: {}", format!($($arg)*));
+        process::exit(1);
+    }}
+}
+
 macro_rules! message {
     ($ctx:expr, $($arg:tt)*) => {{
         if $ctx.config.verbosity >= 0 {
-            use std::io::Write;  // Import the Write trait to access the flush method
-
-            // Write the formatted message to the writer
-            writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))).unwrap();
-
-            // Flush the writer to ensure the output is immediately visible
-            $ctx.writer.flush().unwrap();
-        }
+            use std::io::Write;
+            if let Err(e) = writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))) {
+                die!("Failed to write message: {}", e);
+            }
+            if let Err(f) = $ctx.writer.flush() {
+                die!("Failed to flush writer: {}", f);
+        }}
     }}
 }
 
 macro_rules! raw_message {
     ($ctx:expr, $($arg:tt)*) => {{
         if $ctx.config.verbosity >= 0 {
-            use std::io::Write;  // Import the Write trait to access the flush method
-
-            // Write the formatted message directly to the writer without prefix
-            writeln!($ctx.writer, "{}", format_args!($($arg)*)).unwrap();
-
-            // Flush the writer to ensure the output is immediately visible
-            $ctx.writer.flush().unwrap();
+            use std::io::Write;
+            if let Err(e) = writeln!($ctx.writer, "{}", format_args!($($arg)*)) {
+                die!("Failed to write message: {}", e);
+            }
+            if let Err(e) = $ctx.writer.flush() {
+                die!("Failed to flush writer: {}", e);
+            }
         }
     }}
 }
@@ -325,8 +328,7 @@ fn main() {
     message!(&mut ctx, "BabySub Subsumption Preprocessor");
 
     if let Err(e) = parse_cnf(ctx.config.input_path.clone(), &mut ctx) {
-        eprintln!("Failed to parse CNF: {}", e);
-        process::exit(1);
+        die!("Failed to parse CNF: {}", e);
     }
 
     print_cnf(&mut ctx);
