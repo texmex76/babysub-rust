@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
+use std::time::Instant;
 
 // TODO: Remove the unwrap calls and handle errors properly.
 
@@ -63,11 +64,19 @@ impl CNFFormula {
     }
 }
 
+struct Stats {
+    // added: usize, // In Prof. Biere's code, this does not do anything, so I ommited it.
+    checked: usize,
+    parsed: usize,
+    subsumed: usize,
+    start_time: Instant,
+}
+
 struct SATContext {
     config: Config,
     formula: CNFFormula,
     writer: BufWriter<Box<dyn Write>>,
-    reader: BufReader<Box<dyn Read>>,
+    stats: Stats,
 }
 
 impl SATContext {
@@ -77,16 +86,17 @@ impl SATContext {
             path => Box::new(File::create(path).expect("Failed to create output file")),
         };
 
-        let input: Box<dyn Read> = match config.input_path.as_str() {
-            "" => Box::new(io::stdin()),
-            path => Box::new(File::open(path).expect("Failed to open input file")),
-        };
-
         SATContext {
             config,
             formula: CNFFormula::new(),
             writer: BufWriter::new(output),
-            reader: BufReader::new(input),
+            stats: Stats {
+                // added: 0,
+                checked: 0,
+                parsed: 0,
+                subsumed: 0,
+                start_time: Instant::now(),
+            },
         }
     }
 }
@@ -130,11 +140,64 @@ struct Config {
     sign: bool,
 }
 
-fn parse_cnf(ctx: &mut SATContext) -> io::Result<()> {
+fn average(a: usize, b: usize) -> f64 {
+    if b != 0 {
+        a as f64 / b as f64
+    } else {
+        0.0
+    }
+}
+
+fn percent(a: usize, b: usize) -> f64 {
+    100.0 * average(a, b)
+}
+
+fn report_stats(ctx: &mut SATContext) {
+    let elapsed_time = ctx.stats.start_time.elapsed().as_secs_f64();
+    message!(
+        ctx,
+        "{:<20} {:>10}    clauses {:.2} per subsumed",
+        "checked:",
+        ctx.stats.checked,
+        average(ctx.stats.subsumed, ctx.stats.subsumed)
+    );
+    message!(
+        ctx,
+        "{:<20} {:>10}    clauses {:.0}%",
+        "subsumed:",
+        ctx.stats.subsumed,
+        percent(ctx.stats.subsumed, ctx.stats.parsed)
+    );
+    message!(ctx, "{:<20} {:13.2} seconds", "process-time:", elapsed_time);
+}
+
+macro_rules! parse_error {
+    ($ctx:expr, $msg:expr, $line:expr) => {{
+        eprintln!(
+            "babysub: parse error: at line {} in '{}': {}",
+            $line, $ctx.config.input_path, $msg
+        );
+        process::exit(1);
+    }};
+}
+
+fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
+    let input: Box<dyn Read> = if input_path.is_empty() {
+        message!(ctx, "reading from '<stdin>'");
+        Box::new(io::stdin())
+    } else {
+        message!(ctx, "reading from '{}'", input_path);
+        Box::new(File::open(&input_path)?)
+    };
+
+    let reader = BufReader::new(input);
     let mut current_clause_index = 0;
     let mut header_parsed = false;
+    let mut clauses_count = 0;
+    let mut line_number = 0;
 
-    while let Some(line) = ctx.reader.by_ref().lines().next() {
+    for line in reader.lines() {
+        line_number += 1;
         let line = line?;
         if line.starts_with('c') {
             continue; // Skip comment lines
@@ -142,46 +205,57 @@ fn parse_cnf(ctx: &mut SATContext) -> io::Result<()> {
         if line.starts_with("p cnf") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() < 4 {
-                writeln!(ctx.writer, "Error: Invalid header format.")?;
-                process::exit(1);
+                parse_error!(ctx, "Invalid header format.", line_number);
             }
             ctx.formula.variables = parts[2].parse().unwrap_or_else(|_| {
-                writeln!(ctx.writer, "Error: Invalid number of variables.").unwrap();
-                process::exit(1);
+                parse_error!(ctx, "Could not read number of variables.", line_number);
             });
-            let _clauses_count: usize = parts[3].parse().unwrap_or_else(|_| {
-                writeln!(ctx.writer, "Error: Invalid number of clauses.").unwrap();
-                process::exit(1);
+            clauses_count = parts[3].parse().unwrap_or_else(|_| {
+                parse_error!(ctx, "Could not read number of clauses.", line_number);
             });
             header_parsed = true;
             message!(
                 ctx,
                 "parsed 'p cnf {} {}' header",
                 ctx.formula.variables,
-                _clauses_count
+                clauses_count
             );
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
                 .map(|num| {
                     num.parse().unwrap_or_else(|_| {
-                        writeln!(ctx.writer, "Error: Invalid literal format.").unwrap();
-                        process::exit(1);
+                        parse_error!(ctx, "Invalid literal format.", line_number);
                     })
                 })
                 .filter(|&x| x != 0)
                 .collect();
             ctx.formula.add_clause(clause, current_clause_index);
             current_clause_index += 1;
+            ctx.stats.parsed += 1;
         } else {
-            writeln!(ctx.writer, "Error: CNF header not found.")?;
-            process::exit(1);
+            parse_error!(ctx, "CNF header not found.", line_number);
         }
+    }
+    if clauses_count != ctx.stats.parsed {
+        parse_error!(
+            ctx,
+            format!(
+                "Mismatch in declared and parsed clauses: expected {}, got {}",
+                clauses_count, ctx.stats.parsed
+            ),
+            line_number
+        );
     }
     Ok(())
 }
 
 fn print_cnf(ctx: &mut SATContext) {
+    if ctx.config.sign {
+        let signature = ctx.formula.compute_signature();
+        message!(ctx, "hash-signature: {}", signature);
+    }
+
     raw_message!(
         ctx,
         "p cnf {} {}",
@@ -250,23 +324,11 @@ fn main() {
     let mut ctx = SATContext::new(config);
     message!(&mut ctx, "BabySub Subsumption Preprocessor");
 
-    // Adjusted output message for input path
-    if ctx.config.input_path.is_empty() {
-        message!(ctx, "reading from '<stdin>'"); // TODO: Print that before input from stdin
-                                                 // has arrived
-    } else {
-        message!(ctx, "reading from '{}'", ctx.config.input_path);
-    }
-
-    if let Err(e) = parse_cnf(&mut ctx) {
+    if let Err(e) = parse_cnf(ctx.config.input_path.clone(), &mut ctx) {
         eprintln!("Failed to parse CNF: {}", e);
         process::exit(1);
     }
 
-    if ctx.config.sign {
-        let signature = ctx.formula.compute_signature();
-        message!(&mut ctx, "hash-signature: {}", signature);
-    }
-
     print_cnf(&mut ctx);
+    report_stats(&mut ctx);
 }
