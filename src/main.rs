@@ -5,6 +5,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
 use std::time::Instant;
 
+// TODO: Add IDs to clauses. For that, promtp ChatGPT and ask it to discuss a separate clause
+// struct vs having what we have now.
+
 struct CNFFormula {
     variables: usize,
     clauses: Vec<Vec<i32>>,
