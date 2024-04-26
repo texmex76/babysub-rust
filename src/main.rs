@@ -105,6 +105,20 @@ macro_rules! message {
     }}
 }
 
+macro_rules! raw_message {
+    ($ctx:expr, $($arg:tt)*) => {{
+        if $ctx.config.verbosity >= 0 {
+            use std::io::Write;  // Import the Write trait to access the flush method
+
+            // Write the formatted message directly to the writer without prefix
+            writeln!($ctx.writer, "{}", format_args!($($arg)*)).unwrap();
+
+            // Flush the writer to ensure the output is immediately visible
+            $ctx.writer.flush().unwrap();
+        }
+    }}
+}
+
 // fn simplify_formula(formula: &mut CNFFormula) {
 //     // This will contain logic to simplify the CNF formula.
 // }
@@ -167,13 +181,21 @@ fn parse_cnf(ctx: &mut SATContext) -> io::Result<()> {
     Ok(())
 }
 
-fn print_cnf(formula: &CNFFormula) {
-    println!("p cnf {} {}", formula.variables, formula.clauses.len());
-    for clause in &formula.clauses {
-        for literal in clause {
-            print!("{} ", literal);
-        }
-        println!("0");
+fn print_cnf(ctx: &mut SATContext) {
+    raw_message!(
+        ctx,
+        "p cnf {} {}",
+        ctx.formula.variables,
+        ctx.formula.clauses.len()
+    );
+    for clause in &ctx.formula.clauses {
+        let clause_string = clause
+            .iter()
+            .map(|&lit| lit.to_string())
+            .collect::<Vec<String>>()
+            .join(" ")
+            + " 0";
+        raw_message!(ctx, "{}", clause_string);
     }
 }
 
@@ -236,17 +258,15 @@ fn main() {
         message!(ctx, "reading from '{}'", ctx.config.input_path);
     }
 
-    parse_cnf(&mut ctx).unwrap_or_else(|err| {
-        eprintln!("Failed to parse CNF: {}", err);
+    if let Err(e) = parse_cnf(&mut ctx) {
+        eprintln!("Failed to parse CNF: {}", e);
         process::exit(1);
-    });
+    }
 
     if ctx.config.sign {
         let signature = ctx.formula.compute_signature();
         message!(&mut ctx, "hash-signature: {}", signature);
     }
 
-    if ctx.config.verbosity > 0 {
-        print_cnf(&ctx.formula);
-    }
+    print_cnf(&mut ctx);
 }
