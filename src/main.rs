@@ -1,8 +1,10 @@
 use clap::{App, Arg};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
+
+// TODO: Remove the unwrap calls and handle errors properly.
 
 struct CNFFormula {
     variables: usize,
@@ -61,6 +63,34 @@ impl CNFFormula {
     }
 }
 
+struct SATContext {
+    config: Config,
+    formula: CNFFormula,
+    writer: BufWriter<Box<dyn Write>>,
+    reader: BufReader<Box<dyn Read>>,
+}
+
+impl SATContext {
+    fn new(config: Config) -> Self {
+        let output: Box<dyn Write> = match config.output_path.as_str() {
+            "" => Box::new(io::stdout()),
+            path => Box::new(File::create(path).expect("Failed to create output file")),
+        };
+
+        let input: Box<dyn Read> = match config.input_path.as_str() {
+            "" => Box::new(io::stdin()),
+            path => Box::new(File::open(path).expect("Failed to open input file")),
+        };
+
+        SATContext {
+            config,
+            formula: CNFFormula::new(),
+            writer: BufWriter::new(output),
+            reader: BufReader::new(input),
+        }
+    }
+}
+
 // fn simplify_formula(formula: &mut CNFFormula) {
 //     // This will contain logic to simplify the CNF formula.
 // }
@@ -72,58 +102,54 @@ struct Config {
     sign: bool,
 }
 
-fn parse_cnf(input_path: &str) -> io::Result<CNFFormula> {
-    let input_file = File::open(input_path)?;
-    let reader = BufReader::new(input_file);
-    let mut formula = CNFFormula::new();
+fn parse_cnf(ctx: &mut SATContext) -> io::Result<()> {
     let mut current_clause_index = 0;
-
-    let mut lines = reader.lines();
     let mut header_parsed = false;
 
-    while let Some(line) = lines.next() {
+    while let Some(line) = ctx.reader.by_ref().lines().next() {
         let line = line?;
         if line.starts_with('c') {
-            continue;
+            continue; // Skip comment lines
         }
         if line.starts_with("p cnf") {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() < 4 {
-                eprintln!("Error: Invalid header format.");
+                writeln!(ctx.writer, "Error: Invalid header format.")?;
                 process::exit(1);
             }
-            formula.variables = parts[2].parse().unwrap_or_else(|_| {
-                eprintln!("Error: Invalid number of variables.");
+            ctx.formula.variables = parts[2].parse().unwrap_or_else(|_| {
+                writeln!(ctx.writer, "Error: Invalid number of variables.").unwrap();
                 process::exit(1);
             });
             let _clauses_count: usize = parts[3].parse().unwrap_or_else(|_| {
-                eprintln!("Error: Invalid number of clauses.");
+                writeln!(ctx.writer, "Error: Invalid number of clauses.").unwrap();
                 process::exit(1);
             });
             header_parsed = true;
-            println!(
+            writeln!(
+                ctx.writer,
                 "c parsed 'p cnf {} {}' header",
-                formula.variables, _clauses_count
-            );
+                ctx.formula.variables, _clauses_count
+            )?;
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
                 .map(|num| {
                     num.parse().unwrap_or_else(|_| {
-                        eprintln!("Error: Invalid literal format.");
+                        writeln!(ctx.writer, "Error: Invalid literal format.").unwrap();
                         process::exit(1);
                     })
                 })
                 .filter(|&x| x != 0)
                 .collect();
-            formula.add_clause(clause, current_clause_index);
+            ctx.formula.add_clause(clause, current_clause_index);
             current_clause_index += 1;
         } else {
-            eprintln!("Error: CNF header not found.");
+            writeln!(ctx.writer, "Error: CNF header not found.")?;
             process::exit(1);
         }
     }
-    Ok(formula)
+    Ok(())
 }
 
 fn print_cnf(formula: &CNFFormula) {
@@ -173,27 +199,29 @@ fn main() {
         .get_matches();
 
     let config = Config {
-        input_path: matches.value_of("input").unwrap().to_string(),
-        output_path: matches.value_of("output").unwrap().to_string(),
+        input_path: matches.value_of("input").unwrap_or_default().to_string(),
+        output_path: matches.value_of("output").unwrap_or_default().to_string(),
         verbosity: matches.occurrences_of("verbosity") as i32
             - matches.occurrences_of("quiet") as i32,
         sign: matches.is_present("sign"),
     };
 
-    println!("c BabySub Subsumption Preprocessor");
-    println!("c reading from {}", config.input_path);
+    let mut ctx = SATContext::new(config);
 
-    let formula = parse_cnf(&config.input_path).unwrap_or_else(|err| {
-        eprintln!("Failed to parse CNF file: {}", err);
+    writeln!(ctx.writer, "c BabySub Subsumption Preprocessor").unwrap();
+    writeln!(ctx.writer, "c reading from {}", ctx.config.input_path).unwrap();
+
+    parse_cnf(&mut ctx).unwrap_or_else(|err| {
+        eprintln!("Failed to parse CNF: {}", err);
         process::exit(1);
     });
 
-    if config.sign {
-        let signature = formula.compute_signature();
-        println!("c hash-signature: {}", signature);
+    if ctx.config.sign {
+        let signature = ctx.formula.compute_signature();
+        writeln!(ctx.writer, "c hash-signature: {}", signature).unwrap();
     }
 
-    if config.verbosity > 0 {
-        print_cnf(&formula);
+    if ctx.config.verbosity > 0 {
+        print_cnf(&ctx.formula);
     }
 }

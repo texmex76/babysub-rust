@@ -1,5 +1,4 @@
 use assert_cmd::Command; // To run the command line application
-use predicates::prelude::*; // Use predicates for assertions
 use std::fs;
 use std::io::Write;
 
