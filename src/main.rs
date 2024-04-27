@@ -5,8 +5,9 @@ use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
 use std::time::Instant;
 
-// TODO: Add IDs to clauses. For that, promtp ChatGPT and ask it to discuss a separate clause
-// struct vs having what we have now.
+// TODO: Clauses must be structs. The struct must contain a vector of literals and the ID of the clause.
+// TODO: Add IDs to clauses. Each clause must have an ID for debugging purposes.
+// TODO: We need a matrix. A matrix is a vector of vectors. Each vector is a collection of references to clauses.
 
 struct CNFFormula {
     variables: usize,
