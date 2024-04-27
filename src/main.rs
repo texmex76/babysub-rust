@@ -5,73 +5,6 @@ use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::process;
 use std::time::Instant;
 
-// TODO: Clauses must be structs. The struct must contain a vector of literals and the ID of the clause.
-// TODO: Add IDs to clauses. Each clause must have an ID for debugging purposes.
-// TODO: We need a matrix. A matrix is a vector of vectors. Each vector is a collection of references to clauses.
-
-struct CNFFormula {
-    variables: usize,
-    clauses: Vec<Vec<i32>>,
-    literal_map: HashMap<i32, Vec<usize>>,
-}
-
-impl CNFFormula {
-    fn new() -> CNFFormula {
-        CNFFormula {
-            variables: 0,
-            clauses: Vec::new(),
-            literal_map: HashMap::new(),
-        }
-    }
-
-    fn add_clause(&mut self, clause: Vec<i32>, index: usize) {
-        for &literal in &clause {
-            self.literal_map
-                .entry(literal)
-                .or_insert_with(Vec::new)
-                .push(index);
-        }
-        self.clauses.push(clause);
-    }
-}
-
-struct Stats {
-    // added: usize, // In Prof. Biere's code, this does not do anything, so I ommited it.
-    checked: usize,
-    parsed: usize,
-    subsumed: usize,
-    start_time: Instant,
-}
-
-struct SATContext {
-    config: Config,
-    formula: CNFFormula,
-    writer: BufWriter<Box<dyn Write>>,
-    stats: Stats,
-}
-
-impl SATContext {
-    fn new(config: Config) -> Self {
-        let output: Box<dyn Write> = match config.output_path.as_str() {
-            "<stdout>" => Box::new(io::stdout()),
-            path => Box::new(File::create(path).expect("Failed to create output file")),
-        };
-
-        SATContext {
-            config,
-            formula: CNFFormula::new(),
-            writer: BufWriter::new(output),
-            stats: Stats {
-                // added: 0,
-                checked: 0,
-                parsed: 0,
-                subsumed: 0,
-                start_time: Instant::now(),
-            },
-        }
-    }
-}
-
 macro_rules! die {
     ($($arg:tt)*) => {{
         eprintln!("babysub: error: {}", format!($($arg)*));
@@ -119,6 +52,112 @@ macro_rules! verbose {
     }}
 }
 
+struct Clause {
+    id: usize,
+    literals: Vec<i32>,
+}
+struct CNFFormula {
+    variables: usize,
+    added_clauses: usize,
+    clauses: Vec<Clause>,
+    literal_matrix: HashMap<i32, Vec<usize>>,
+}
+
+impl CNFFormula {
+    fn new() -> CNFFormula {
+        CNFFormula {
+            variables: 0,
+            added_clauses: 0,
+            clauses: Vec::new(),
+            literal_matrix: HashMap::new(),
+        }
+    }
+
+    fn add_clause(&mut self, clause: Vec<i32>) {
+        let clause_id = self.added_clauses;
+        self.added_clauses += 1;
+
+        let new_clause = Clause {
+            id: clause_id,
+            literals: clause,
+        };
+        self.clauses.push(new_clause);
+
+        for &literal in &self.clauses[clause_id].literals {
+            self.literal_matrix
+                .entry(literal)
+                .or_insert_with(Vec::new)
+                .push(clause_id);
+        }
+    }
+    fn delete_clause(&mut self, clause_id: usize) {
+        let clause_index = self
+            .clauses
+            .iter()
+            .position(|c| c.id == clause_id)
+            .unwrap_or_else(|| die!("Clause ID not found: {}", clause_id));
+
+        for &literal in &self.clauses[clause_index].literals {
+            self.literal_matrix
+                .get_mut(&literal)
+                .unwrap()
+                .retain(|&id| id != clause_id); // Remove the clause ID
+        }
+
+        self.clauses.remove(clause_index);
+    }
+
+    fn delete_literal(&mut self, clause_id: usize, literal: i32) {
+        let clause = self
+            .clauses
+            .iter_mut()
+            .find(|c| c.id == clause_id)
+            .unwrap_or_else(|| panic!("Clause ID not found: {}", clause_id));
+
+        clause.literals.retain(|&x| x != literal);
+
+        self.literal_matrix
+            .get_mut(&literal)
+            .unwrap()
+            .retain(|&id| id != clause_id);
+    }
+}
+
+struct Stats {
+    checked: usize,
+    parsed: usize,
+    subsumed: usize,
+    start_time: Instant,
+}
+
+struct SATContext {
+    config: Config,
+    formula: CNFFormula,
+    writer: BufWriter<Box<dyn Write>>,
+    stats: Stats,
+}
+
+impl SATContext {
+    fn new(config: Config) -> Self {
+        let output: Box<dyn Write> = match config.output_path.as_str() {
+            "<stdout>" => Box::new(io::stdout()),
+            path => Box::new(File::create(path).expect("Failed to create output file")),
+        };
+
+        SATContext {
+            config,
+            formula: CNFFormula::new(),
+            writer: BufWriter::new(output),
+            stats: Stats {
+                checked: 0,
+                parsed: 0,
+                subsumed: 0,
+                start_time: Instant::now(),
+            },
+        }
+    }
+}
+
 #[cfg(feature = "logging")]
 macro_rules! LOG {
     ($($arg:tt)*) => {{
@@ -140,7 +179,7 @@ fn compute_signature(ctx: &mut SATContext) -> u64 {
     let mut hash: u64 = 0;
 
     for clause in &ctx.formula.clauses {
-        let mut d = clause.clone();
+        let mut d = clause.literals.clone();
         d.sort_unstable();
         let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
         let mut i = 1usize;
@@ -220,7 +259,6 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
     };
 
     let reader = BufReader::new(input);
-    let mut current_clause_index = 0;
     let mut header_parsed = false;
     let mut clauses_count = 0;
     let mut line_number = 0;
@@ -259,8 +297,7 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 })
                 .filter(|&x| x != 0)
                 .collect();
-            ctx.formula.add_clause(clause, current_clause_index);
-            current_clause_index += 1;
+            ctx.formula.add_clause(clause);
             ctx.stats.parsed += 1;
         } else {
             parse_error!(ctx, "CNF header not found.", line_number);
@@ -295,6 +332,7 @@ fn print(ctx: &mut SATContext) {
     );
     for clause in &ctx.formula.clauses {
         let clause_string = clause
+            .literals
             .iter()
             .map(|&lit| lit.to_string())
             .collect::<Vec<String>>()
