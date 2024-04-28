@@ -52,10 +52,71 @@ macro_rules! verbose {
     }}
 }
 
+macro_rules! parse_error {
+    ($ctx:expr, $msg:expr, $line:expr) => {{
+        eprintln!(
+            "babysub: parse error: at line {} in '{}': {}",
+            $line, $ctx.config.input_path, $msg
+        );
+        process::exit(1);
+    }};
+}
+
+#[cfg(feature = "logging")]
+macro_rules! LOG {
+    ($($arg:tt)*) => {{
+        println!("c LOG {}", format_args!($($arg)*));
+    }};
+}
+
+#[cfg(not(feature = "logging"))]
+macro_rules! LOG {
+    ($($arg:tt)*) => {{}};
+}
+
+struct Config {
+    input_path: String,
+    output_path: String,
+    verbosity: i32,
+    sign: bool,
+}
+
+fn average(a: usize, b: usize) -> f64 {
+    if b != 0 {
+        a as f64 / b as f64
+    } else {
+        0.0
+    }
+}
+
+fn percent(a: usize, b: usize) -> f64 {
+    100.0 * average(a, b)
+}
+
+struct Stats {
+    checked: usize,
+    parsed: usize,
+    subsumed: usize,
+    start_time: Instant,
+}
+
+// TODO: The data structures right now are inefficient and need to be optimized. I will work on
+// this in the next few days. - Bernhard
+
 struct Clause {
     id: usize,
     literals: Vec<i32>,
 }
+
+impl Clone for Clause {
+    fn clone(&self) -> Self {
+        Clause {
+            id: self.id,
+            literals: self.literals.clone(),
+        }
+    }
+}
+
 struct CNFFormula {
     variables: usize,
     added_clauses: usize,
@@ -81,21 +142,40 @@ impl CNFFormula {
             id: clause_id,
             literals: clause,
         };
-        self.clauses.push(new_clause);
+        LOG!(
+            "adding clause: {:?} with id: {}",
+            new_clause.literals,
+            new_clause.id
+        );
+        let new_clause_ = new_clause.clone();
+        self.clauses.push(new_clause_);
 
-        for &literal in &self.clauses[clause_id].literals {
+        LOG!(
+            "adding clause id: {} to literal matrix for literals: {:?}",
+            clause_id,
+            new_clause.literals
+        );
+        for &literal in &new_clause.literals {
             self.literal_matrix
                 .entry(literal)
                 .or_insert_with(Vec::new)
                 .push(clause_id);
         }
     }
+
+    fn get_clause_index(&self, clause_id: usize) -> usize {
+        self.clauses
+            .iter()
+            .position(|c| c.id == clause_id)
+            .unwrap_or_else(|| die!("clause id not found: {}", clause_id))
+    }
+
     fn delete_clause(&mut self, clause_id: usize) {
         let clause_index = self
             .clauses
             .iter()
             .position(|c| c.id == clause_id)
-            .unwrap_or_else(|| die!("Clause ID not found: {}", clause_id));
+            .unwrap_or_else(|| die!("clause id not found: {}", clause_id));
 
         for &literal in &self.clauses[clause_index].literals {
             self.literal_matrix
@@ -104,7 +184,13 @@ impl CNFFormula {
                 .retain(|&id| id != clause_id); // Remove the clause ID
         }
 
+        LOG!(
+            "attempting to delete clause: {:?} with id: {}",
+            self.clauses[clause_index].literals,
+            clause_id
+        );
         self.clauses.remove(clause_index);
+        LOG!("deleted clause with id: {}", clause_id);
     }
 
     fn delete_literal(&mut self, clause_id: usize, literal: i32) {
@@ -112,22 +198,31 @@ impl CNFFormula {
             .clauses
             .iter_mut()
             .find(|c| c.id == clause_id)
-            .unwrap_or_else(|| panic!("Clause ID not found: {}", clause_id));
+            .unwrap_or_else(|| panic!("Clause id not found: {}", clause_id));
 
+        LOG!(
+            "attempting to delete literal: {} from clause: {:?}",
+            literal,
+            clause.literals
+        );
         clause.literals.retain(|&x| x != literal);
+        LOG!(
+            "deleted literal: {} from clause: {:?}",
+            literal,
+            clause.literals
+        );
 
+        LOG!(
+            "attempting to delete clause id: {} for literal: {}",
+            clause_id,
+            literal
+        );
         self.literal_matrix
             .get_mut(&literal)
             .unwrap()
             .retain(|&id| id != clause_id);
+        LOG!("deleted clause id: {} for literal: {}", clause_id, literal);
     }
-}
-
-struct Stats {
-    checked: usize,
-    parsed: usize,
-    subsumed: usize,
-    start_time: Instant,
 }
 
 struct SATContext {
@@ -158,69 +253,6 @@ impl SATContext {
     }
 }
 
-#[cfg(feature = "logging")]
-macro_rules! LOG {
-    ($($arg:tt)*) => {{
-        println!("c LOG {}", format_args!($($arg)*));
-    }};
-}
-
-#[cfg(not(feature = "logging"))]
-macro_rules! LOG {
-    ($($arg:tt)*) => {{}};
-}
-
-fn compute_signature(ctx: &mut SATContext) -> u64 {
-    verbose!(ctx, 1, "computing hash-signature");
-    let nonces = [
-        71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021, 1854614941,
-        647800535, 53523743, 783815875, 1643643143, 682599717, 291474505, 229233697, 1633529763,
-    ];
-    let mut hash: u64 = 0;
-
-    for clause in &ctx.formula.clauses {
-        let mut d: Vec<u32> = clause.literals.iter().map(|&lit| lit as u32).collect();
-        d.sort_unstable();
-        let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
-        let mut i = 1usize;
-
-        for &ulit in &d {
-            tmp = (tmp << 4) | (tmp >> 60);
-            tmp = tmp.wrapping_add(ulit as u64);
-            message!(ctx, "tmp: {}", tmp);
-            tmp = tmp.wrapping_mul(nonces[i]);
-            i = (i + 1) % nonces.len();
-        }
-
-        hash = hash.wrapping_add(tmp);
-    }
-
-    hash
-}
-
-fn simplify(ctx: &mut SATContext) {
-    verbose!(ctx, 1, "starting to simplify formula");
-}
-
-struct Config {
-    input_path: String,
-    output_path: String,
-    verbosity: i32,
-    sign: bool,
-}
-
-fn average(a: usize, b: usize) -> f64 {
-    if b != 0 {
-        a as f64 / b as f64
-    } else {
-        0.0
-    }
-}
-
-fn percent(a: usize, b: usize) -> f64 {
-    100.0 * average(a, b)
-}
-
 fn report_stats(ctx: &mut SATContext) {
     let elapsed_time = ctx.stats.start_time.elapsed().as_secs_f64();
     message!(
@@ -240,14 +272,31 @@ fn report_stats(ctx: &mut SATContext) {
     message!(ctx, "{:<20} {:13.2} seconds", "process-time:", elapsed_time);
 }
 
-macro_rules! parse_error {
-    ($ctx:expr, $msg:expr, $line:expr) => {{
-        eprintln!(
-            "babysub: parse error: at line {} in '{}': {}",
-            $line, $ctx.config.input_path, $msg
-        );
-        process::exit(1);
-    }};
+fn compute_signature(ctx: &mut SATContext) -> u64 {
+    verbose!(ctx, 1, "computing hash-signature");
+    let nonces = [
+        71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021, 1854614941,
+        647800535, 53523743, 783815875, 1643643143, 682599717, 291474505, 229233697, 1633529763,
+    ];
+    let mut hash: u64 = 0;
+
+    for clause in &ctx.formula.clauses {
+        let mut d: Vec<u32> = clause.literals.iter().map(|&lit| lit as u32).collect();
+        d.sort_unstable();
+        let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
+        let mut i = 1usize;
+
+        for &ulit in &d {
+            tmp = (tmp << 4) | (tmp >> 60);
+            tmp = tmp.wrapping_add(ulit as u64);
+            tmp = tmp.wrapping_mul(nonces[i]);
+            i = (i + 1) % nonces.len();
+        }
+
+        hash = hash.wrapping_add(tmp);
+    }
+
+    hash
 }
 
 fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
@@ -298,6 +347,7 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 })
                 .filter(|&x| x != 0)
                 .collect();
+            LOG!("parsed clause: {:?}", clause);
             ctx.formula.add_clause(clause);
             ctx.stats.parsed += 1;
         } else {
@@ -341,6 +391,11 @@ fn print(ctx: &mut SATContext) {
             + " 0";
         raw_message!(ctx, "{}", clause_string);
     }
+}
+
+fn simplify(ctx: &mut SATContext) {
+    verbose!(ctx, 1, "starting to simplify formula");
+    verbose!(ctx, 1, "simplification complete");
 }
 
 fn main() {
@@ -389,7 +444,7 @@ fn main() {
     };
 
     #[cfg(feature = "logging")]
-    let verbosity = if quiet {
+    let verbosity = if matches.is_present("quiet") {
         -1
     } else if matches.get_flag("logging") {
         999
