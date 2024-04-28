@@ -179,14 +179,15 @@ fn compute_signature(ctx: &mut SATContext) -> u64 {
     let mut hash: u64 = 0;
 
     for clause in &ctx.formula.clauses {
-        let mut d = clause.literals.clone();
+        let mut d: Vec<u32> = clause.literals.iter().map(|&lit| lit as u32).collect();
         d.sort_unstable();
         let mut tmp = (d.len() as u64 + 1).wrapping_mul(nonces[0]);
         let mut i = 1usize;
 
         for &ulit in &d {
-            tmp = (tmp << 4) | (tmp >> 60); // Rotating bits
+            tmp = (tmp << 4) | (tmp >> 60);
             tmp = tmp.wrapping_add(ulit as u64);
+            message!(ctx, "tmp: {}", tmp);
             tmp = tmp.wrapping_mul(nonces[i]);
             i = (i + 1) % nonces.len();
         }
