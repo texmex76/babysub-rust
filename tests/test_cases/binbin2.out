@@ -1,0 +1,14 @@
+c BabySub Subsumption Preprocessor
+c reading from '/home/gstrein/Documents/repos/babysub-rust/tests/test_cases/binbin2.golden'
+c parsed 'p cnf 2 2' header
+c tmp: 3450056018
+c tmp: 2221466263246509473
+c tmp: 3450056017
+c tmp: 2221466247614058324
+c hash-signature: 13752085431583871717
+p cnf 2 2
+-1 2 0
+1 2 0
+c checked:                      0    clauses 0.00 per subsumed
+c subsumed:                     0    clauses 0%
+c process-time:                 0.00 seconds

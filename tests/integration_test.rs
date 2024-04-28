@@ -1,42 +1,51 @@
-use assert_cmd::Command; // To run the command line application
+use assert_cmd::Command;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
 use std::process::Output;
 
 // Path constants for the tests directory and test files
-const TEST_DIR: &str = "test/test_cases/";
-const CNF_EXT: &str = ".cnf";
-const GOLDEN_EXT: &str = ".golden";
+const TEST_DIR: &str = "tests/test_cases/";
+const CNF_EXT: &str = "cnf";
+const GOLDEN_EXT: &str = "golden";
+const EXECUTABLE_NAME: &str = "babysub-rust";
 
-// Function to find the path to the executable
-fn find_executable() -> Result<String, Box<dyn std::error::Error>> {
-    let target_dir = Path::new("target/debug/");
-    let entries = fs::read_dir(target_dir)?;
-    for entry in entries {
-        let path = entry?.path();
-        if path.is_file() && path.file_name().unwrap_or_default() == "babysub-rust" {
-            return Ok(path.to_string_lossy().to_string());
-        }
-    }
-    Err("Executable 'babysub-rust' not found in target/debug/".into())
+fn extract_hash(content: &str) -> Result<String, Box<dyn std::error::Error>> {
+    content
+        .lines()
+        .find(|line| line.starts_with("c hash-signature"))
+        .ok_or_else(|| "Hash-signature not found".into())
+        .map(|line| line.split_whitespace().last().unwrap_or("").to_string())
 }
 
 fn run_test_case(test_name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cnf_path = Path::new(TEST_DIR).join(test_name).with_extension(CNF_EXT);
-    let golden_path = Path::new(TEST_DIR)
+    let current_dir = std::env::current_dir().unwrap();
+    let cnf_path = current_dir
+        .join(TEST_DIR)
+        .join(test_name)
+        .with_extension(CNF_EXT);
+    let golden_path = current_dir
+        .join(TEST_DIR)
         .join(test_name)
         .with_extension(GOLDEN_EXT);
-    let output_path = Path::new(TEST_DIR).join(test_name).with_extension("out");
-    let log_path = Path::new(TEST_DIR).join(test_name).with_extension("log");
-    let err_path = Path::new(TEST_DIR).join(test_name).with_extension("err");
+    let output_path = current_dir
+        .join(TEST_DIR)
+        .join(test_name)
+        .with_extension("out");
+    let log_path = current_dir
+        .join(TEST_DIR)
+        .join(test_name)
+        .with_extension("log");
+    let err_path = current_dir
+        .join(TEST_DIR)
+        .join(test_name)
+        .with_extension("err");
 
     // Cleanup before running
     let _ = fs::remove_file(&output_path);
     let _ = fs::remove_file(&log_path);
     let _ = fs::remove_file(&err_path);
 
-    let executable_path = find_executable()?;
+    let executable_path = current_dir.join("target/debug").join(EXECUTABLE_NAME);
     let mut cmd = Command::new(executable_path);
     cmd.arg("-s").arg(&cnf_path).arg(&output_path);
 
@@ -50,17 +59,15 @@ fn run_test_case(test_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let output_content = fs::read_to_string(&output_path)?;
     let golden_content = fs::read_to_string(&golden_path)?;
 
-    let output_hash = output_content
-        .lines()
-        .find(|line| line.starts_with("c hash-signature"))
-        .ok_or("Output hash-signature not found")?;
-    let golden_hash = golden_content
-        .lines()
-        .find(|line| line.starts_with("c hash-signature"))
-        .ok_or("Golden hash-signature not found")?;
+    let output_hash = extract_hash(&output_content)?;
+    let golden_hash = extract_hash(&golden_content)?;
 
     if output_hash != golden_hash {
-        return Err(format!("Hash signatures do not match for test: {}", test_name).into());
+        return Err(format!(
+            "Hash signatures do not match. Output hash: '{}', Golden hash: '{}'",
+            output_hash, golden_hash
+        )
+        .into());
     }
 
     Ok(())
