@@ -13,42 +13,50 @@ macro_rules! die {
 }
 
 macro_rules! message {
-    ($ctx:expr, $($arg:tt)*) => {{
-        if $ctx.config.verbosity >= 0 {
-            use std::io::Write;
-            if let Err(e) = writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))) {
+    ($verbosity:expr, $($arg:tt)*) => {{
+        use std::io::{self, Write};
+        if $verbosity >= 0 {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(e) = writeln!(handle, "{}", format!("c {}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
             }
-            if let Err(f) = $ctx.writer.flush() {
-                die!("Failed to flush writer: {}", f);
-        }}
+            if let Err(f) = handle.flush() {
+                die!("Failed to flush stdout: {}", f);
+            }
+        }
     }}
 }
 
 macro_rules! raw_message {
-    ($ctx:expr, $($arg:tt)*) => {{
-        if $ctx.config.verbosity >= 0 {
-            use std::io::Write;
-            if let Err(e) = writeln!($ctx.writer, "{}", format_args!($($arg)*)) {
+    ($verbosity:expr, $($arg:tt)*) => {{
+        use std::io::{self, Write};
+        if $verbosity >= 0 {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(e) = writeln!(handle, "{}", format!("{}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
             }
-            if let Err(e) = $ctx.writer.flush() {
-                die!("Failed to flush writer: {}", e);
+            if let Err(f) = handle.flush() {
+                die!("Failed to flush stdout: {}", f);
             }
         }
     }}
 }
 
 macro_rules! verbose {
-    ($ctx:expr, $level:expr, $($arg:tt)*) => {{
-        if $ctx.config.verbosity >= $level {
-            use std::io::Write;
-            if let Err(e) = writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))) {
+    ($verbosity:expr, $level:expr, $($arg:tt)*) => {{
+        use std::io::{self, Write};
+        if $verbosity >= $level {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(e) = writeln!(handle, "{}", format!("c {}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
             }
-            if let Err(f) = $ctx.writer.flush() {
-                die!("Failed to flush writer: {}", f);
-        }}
+            if let Err(f) = handle.flush() {
+                die!("Failed to flush stdout: {}", f);
+            }
+        }
     }}
 }
 
@@ -64,14 +72,18 @@ macro_rules! parse_error {
 
 #[cfg(feature = "logging")]
 macro_rules! LOG {
-    ($ctx:expr, $($arg:tt)*) => {{
-            use std::io::Write;
-            if let Err(e) = writeln!($ctx.writer, "{}", format!("c LOG {}", format_args!($($arg)*))) {
+    ($verbosity:expr, $($arg:tt)*) => {{
+        use std::io::{self, Write};
+        if $verbosity >= 999 {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(e) = writeln!(handle, "{}", format!("c LOG {}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
             }
-            if let Err(f) = $ctx.writer.flush() {
-                die!("Failed to flush writer: {}", f);
+            if let Err(f) = handle.flush() {
+                die!("Failed to flush stdout: {}", f);
             }
+        }
     }}
 }
 
@@ -126,7 +138,12 @@ impl Matrix {
         }
     }
 
-    fn init(&mut self, variables: usize) {
+    fn init(&mut self, variables: usize, verbosity: i32) {
+        LOG!(
+            verbosity,
+            "initializing matrix with {} variables",
+            variables
+        );
         let size = 2 * variables + 1;
         self.matrix = vec![vec![0; size]; size];
         self.offset = variables;
@@ -176,7 +193,8 @@ impl CNFFormula {
         }
     }
 
-    fn add_clause(&mut self, clause: Vec<i32>) {
+    fn add_clause(&mut self, clause: Vec<i32>, verbosity: i32) {
+        LOG!(verbosity, "adding clause: {:?}", clause);
         let new_clause = Clause {
             garbage: false,
             literals: clause,
@@ -185,24 +203,36 @@ impl CNFFormula {
         self.clauses.push(new_clause);
     }
 
-    fn connect_lit(&mut self, lit: i32, clause_id: usize) {
+    fn connect_lit(&mut self, lit: i32, clause_id: usize, verbosity: i32) {
+        LOG!(
+            verbosity,
+            "connecting literal {} to clause {}",
+            lit,
+            clause_id
+        );
         self.matrix[lit].push(clause_id);
     }
 
-    fn connect_clause(&mut self, clause_id: usize) {
+    fn connect_clause(&mut self, clause_id: usize, verbosity: i32) {
+        LOG!(verbosity, "connecting clause {}", clause_id);
         let clause = &self.clauses[clause_id].clone();
         for &lit in &clause.literals {
-            self.connect_lit(lit, clause_id);
+            self.connect_lit(lit, clause_id, verbosity);
         }
     }
 
-    fn collect_garbage_clauses(&mut self) {
+    fn collect_garbage_clauses(&mut self, verbosity: i32) {
         let mut new_clauses = Vec::new();
         for clause in &self.clauses {
             if !clause.garbage {
                 new_clauses.push(clause.clone());
             }
         }
+        LOG!(
+            verbosity,
+            "collected garbage: {} clauses",
+            self.clauses.len() - new_clauses.len()
+        );
         self.clauses = new_clauses;
     }
 }
@@ -238,24 +268,29 @@ impl SATContext {
 fn report_stats(ctx: &mut SATContext) {
     let elapsed_time = ctx.stats.start_time.elapsed().as_secs_f64();
     message!(
-        ctx,
+        ctx.config.verbosity,
         "{:<20} {:>10}    clauses {:.2} per subsumed",
         "checked:",
         ctx.stats.checked,
         average(ctx.stats.subsumed, ctx.stats.subsumed)
     );
     message!(
-        ctx,
+        ctx.config.verbosity,
         "{:<20} {:>10}    clauses {:.0}%",
         "subsumed:",
         ctx.stats.subsumed,
         percent(ctx.stats.subsumed, ctx.stats.parsed)
     );
-    message!(ctx, "{:<20} {:13.2} seconds", "process-time:", elapsed_time);
+    message!(
+        ctx.config.verbosity,
+        "{:<20} {:13.2} seconds",
+        "process-time:",
+        elapsed_time
+    );
 }
 
 fn compute_signature(ctx: &mut SATContext) -> u64 {
-    verbose!(ctx, 1, "computing hash-signature");
+    verbose!(ctx.config.verbosity, 1, "computing hash-signature");
     let nonces = [
         71876167, 708592741, 1483128881, 907283241, 442951013, 537146759, 1366999021, 1854614941,
         647800535, 53523743, 783815875, 1643643143, 682599717, 291474505, 229233697, 1633529763,
@@ -283,10 +318,10 @@ fn compute_signature(ctx: &mut SATContext) -> u64 {
 
 fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
     let input: Box<dyn Read> = if input_path == "<stdin>" {
-        message!(ctx, "reading from '<stdin>'");
+        message!(ctx.config.verbosity, "reading from '<stdin>'");
         Box::new(io::stdin())
     } else {
-        message!(ctx, "reading from '{}'", input_path);
+        message!(ctx.config.verbosity, "reading from '{}'", input_path);
         Box::new(File::open(&input_path)?)
     };
 
@@ -314,12 +349,14 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
             });
             header_parsed = true;
             message!(
-                ctx,
+                ctx.config.verbosity,
                 "parsed 'p cnf {} {}' header",
                 ctx.formula.variables,
                 clauses_count
             );
-            ctx.formula.matrix.init(ctx.formula.variables);
+            ctx.formula
+                .matrix
+                .init(ctx.formula.variables, ctx.config.verbosity);
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
@@ -330,8 +367,8 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 })
                 .filter(|&x| x != 0)
                 .collect();
-            LOG!(ctx, "parsed clause: {:?}", clause);
-            ctx.formula.add_clause(clause);
+            LOG!(ctx.config.verbosity, "parsed clause: {:?}", clause);
+            ctx.formula.add_clause(clause, ctx.config.verbosity);
             ctx.stats.parsed += 1;
         } else {
             parse_error!(ctx, "CNF header not found.", line_number);
@@ -347,19 +384,29 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
             line_number
         );
     }
-    verbose!(ctx, 1, "parsed {} clauses", ctx.stats.parsed);
+    verbose!(
+        ctx.config.verbosity,
+        1,
+        "parsed {} clauses",
+        ctx.stats.parsed
+    );
     Ok(())
 }
 
 fn print(ctx: &mut SATContext) {
-    verbose!(ctx, 1, "writing to '{}'", ctx.config.output_path);
+    verbose!(
+        ctx.config.verbosity,
+        1,
+        "writing to '{}'",
+        ctx.config.output_path
+    );
     if ctx.config.sign {
         let signature = compute_signature(ctx);
-        message!(ctx, "hash-signature: {}", signature);
+        message!(ctx.config.verbosity, "hash-signature: {}", signature);
     }
 
     raw_message!(
-        ctx,
+        ctx.config.verbosity,
         "p cnf {} {}",
         ctx.formula.variables,
         ctx.formula.clauses.len()
@@ -372,27 +419,27 @@ fn print(ctx: &mut SATContext) {
             .collect::<Vec<String>>()
             .join(" ")
             + " 0";
-        raw_message!(ctx, "{}", clause_string);
+        raw_message!(ctx.config.verbosity, "{}", clause_string); // TODO: Fix this
     }
 }
 
 fn forward_subsumption(ctx: &mut SATContext) {
-    verbose!(ctx, 1, "starting forward subsumption");
+    verbose!(ctx.config.verbosity, 1, "starting forward subsumption");
 }
 
 fn backward_subsumption(ctx: &mut SATContext) {
-    verbose!(ctx, 1, "starting backward subsumption");
+    verbose!(ctx.config.verbosity, 1, "starting backward subsumption");
 }
 
 fn simplify(ctx: &mut SATContext) {
-    verbose!(ctx, 1, "starting to simplify formula");
+    verbose!(ctx.config.verbosity, 1, "starting to simplify formula");
     if ctx.config.forward_mode {
         forward_subsumption(ctx);
     } else {
         backward_subsumption(ctx);
     }
-    verbose!(ctx, 1, "simplification complete");
-    ctx.formula.collect_garbage_clauses();
+    verbose!(ctx.config.verbosity, 1, "simplification complete");
+    ctx.formula.collect_garbage_clauses(ctx.config.verbosity);
 }
 
 fn main() {
@@ -472,7 +519,7 @@ fn main() {
     };
 
     let mut ctx = SATContext::new(config);
-    message!(&mut ctx, "BabySub Subsumption Preprocessor");
+    message!(ctx.config.verbosity, "BabySub Subsumption Preprocessor");
 
     if let Err(e) = parse_cnf(ctx.config.input_path.clone(), &mut ctx) {
         die!("Failed to parse CNF: {}", e);
