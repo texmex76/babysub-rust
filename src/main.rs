@@ -1,7 +1,7 @@
 use clap::{Arg, ArgAction, Command};
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::ops::{Index, IndexMut};
 use std::process;
 use std::time::Instant;
 
@@ -41,7 +41,7 @@ macro_rules! raw_message {
 
 macro_rules! verbose {
     ($ctx:expr, $level:expr, $($arg:tt)*) => {{
-        if $ctx.config.verbosity == $level {
+        if $ctx.config.verbosity >= $level {
             use std::io::Write;
             if let Err(e) = writeln!($ctx.writer, "{}", format!("c {}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
@@ -64,9 +64,15 @@ macro_rules! parse_error {
 
 #[cfg(feature = "logging")]
 macro_rules! LOG {
-    ($($arg:tt)*) => {{
-        println!("c LOG {}", format_args!($($arg)*));
-    }};
+    ($ctx:expr, $($arg:tt)*) => {{
+            use std::io::Write;
+            if let Err(e) = writeln!($ctx.writer, "{}", format!("c LOG {}", format_args!($($arg)*))) {
+                die!("Failed to write message: {}", e);
+            }
+            if let Err(f) = $ctx.writer.flush() {
+                die!("Failed to flush writer: {}", f);
+            }
+    }}
 }
 
 #[cfg(not(feature = "logging"))]
@@ -78,6 +84,7 @@ struct Config {
     input_path: String,
     output_path: String,
     verbosity: i32,
+    forward_mode: bool,
     sign: bool,
 }
 
@@ -100,26 +107,53 @@ struct Stats {
     start_time: Instant,
 }
 
-// TODO: The data structures right now are inefficient and need to be optimized. I will work on
-// this in the next few days. - Bernhard
-
-// Make invariant that clause id = clause idx
-// Clause must have: literals, garbage
-// have syntax formula.matrix[lit] to get a vector of clause ids
-// matxix is just a vector with added functionality
-// have no delete clause functionality
-// have functionality to remove all garbages and uphold the invariant
+#[derive(Debug, Clone)]
 struct Clause {
-    id: usize,
+    garbage: bool,
     literals: Vec<i32>,
 }
 
-impl Clone for Clause {
-    fn clone(&self) -> Self {
-        Clause {
-            id: self.id,
-            literals: self.literals.clone(),
+struct Matrix {
+    matrix: Vec<Vec<usize>>,
+    offset: usize,
+}
+
+impl Matrix {
+    fn new() -> Self {
+        Matrix {
+            matrix: Vec::new(),
+            offset: 0,
         }
+    }
+
+    fn init(&mut self, variables: usize) {
+        let size = 2 * variables + 1;
+        self.matrix = vec![vec![0; size]; size];
+        self.offset = variables;
+    }
+}
+
+impl Index<i32> for Matrix {
+    type Output = Vec<usize>;
+
+    fn index(&self, index: i32) -> &Self::Output {
+        let computed_index = self.offset as i32 + index;
+        assert!(
+            computed_index >= 0 && computed_index < self.matrix.len() as i32,
+            "Matrix index out of bounds"
+        );
+        &self.matrix[computed_index as usize]
+    }
+}
+
+impl IndexMut<i32> for Matrix {
+    fn index_mut(&mut self, index: i32) -> &mut Self::Output {
+        let computed_index = self.offset as i32 + index;
+        assert!(
+            computed_index >= 0 && computed_index < self.matrix.len() as i32,
+            "Matrix index out of bounds"
+        );
+        &mut self.matrix[computed_index as usize]
     }
 }
 
@@ -127,107 +161,49 @@ struct CNFFormula {
     variables: usize,
     added_clauses: usize,
     clauses: Vec<Clause>,
-    matrix: HashMap<i32, Vec<usize>>,
+    matrix: Matrix,
+    marks: Vec<bool>,
 }
 
 impl CNFFormula {
-    fn new() -> CNFFormula {
+    fn new() -> Self {
         CNFFormula {
             variables: 0,
             added_clauses: 0,
             clauses: Vec::new(),
-            matrix: HashMap::new(),
+            matrix: Matrix::new(),
+            marks: Vec::new(),
         }
     }
 
     fn add_clause(&mut self, clause: Vec<i32>) {
-        let clause_id = self.added_clauses;
-        self.added_clauses += 1;
-
         let new_clause = Clause {
-            id: clause_id,
+            garbage: false,
             literals: clause,
         };
-        LOG!(
-            "adding clause: {:?} with id: {}",
-            new_clause.literals,
-            new_clause.id
-        );
-        let new_clause_ = new_clause.clone();
-        self.clauses.push(new_clause_);
+        self.added_clauses += 1;
+        self.clauses.push(new_clause);
+    }
 
-        LOG!(
-            "adding clause id: {} to literal matrix for literals: {:?}",
-            clause_id,
-            new_clause.literals
-        );
-        for &literal in &new_clause.literals {
-            self.matrix
-                .entry(literal)
-                .or_insert_with(Vec::new)
-                .push(clause_id);
+    fn connect_lit(&mut self, lit: i32, clause_id: usize) {
+        self.matrix[lit].push(clause_id);
+    }
+
+    fn connect_clause(&mut self, clause_id: usize) {
+        let clause = &self.clauses[clause_id].clone();
+        for &lit in &clause.literals {
+            self.connect_lit(lit, clause_id);
         }
     }
 
-    fn get_clause_index(&self, clause_id: usize) -> usize {
-        self.clauses
-            .iter()
-            .position(|c| c.id == clause_id)
-            .unwrap_or_else(|| die!("clause id not found: {}", clause_id))
-    }
-
-    fn delete_clause(&mut self, clause_id: usize) {
-        let clause_index = self
-            .clauses
-            .iter()
-            .position(|c| c.id == clause_id)
-            .unwrap_or_else(|| die!("clause id not found: {}", clause_id));
-
-        for &literal in &self.clauses[clause_index].literals {
-            self.matrix
-                .get_mut(&literal)
-                .unwrap()
-                .retain(|&id| id != clause_id); // Remove the clause ID
+    fn collect_garbage_clauses(&mut self) {
+        let mut new_clauses = Vec::new();
+        for clause in &self.clauses {
+            if !clause.garbage {
+                new_clauses.push(clause.clone());
+            }
         }
-
-        LOG!(
-            "attempting to delete clause: {:?} with id: {}",
-            self.clauses[clause_index].literals,
-            clause_id
-        );
-        self.clauses.remove(clause_index);
-        LOG!("deleted clause with id: {}", clause_id);
-    }
-
-    fn delete_literal(&mut self, clause_id: usize, literal: i32) {
-        let clause = self
-            .clauses
-            .iter_mut()
-            .find(|c| c.id == clause_id)
-            .unwrap_or_else(|| panic!("Clause id not found: {}", clause_id));
-
-        LOG!(
-            "attempting to delete literal: {} from clause: {:?}",
-            literal,
-            clause.literals
-        );
-        clause.literals.retain(|&x| x != literal);
-        LOG!(
-            "deleted literal: {} from clause: {:?}",
-            literal,
-            clause.literals
-        );
-
-        LOG!(
-            "attempting to delete clause id: {} for literal: {}",
-            clause_id,
-            literal
-        );
-        self.matrix
-            .get_mut(&literal)
-            .unwrap()
-            .retain(|&id| id != clause_id);
-        LOG!("deleted clause id: {} for literal: {}", clause_id, literal);
+        self.clauses = new_clauses;
     }
 }
 
@@ -343,6 +319,7 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 ctx.formula.variables,
                 clauses_count
             );
+            ctx.formula.matrix.init(ctx.formula.variables);
         } else if header_parsed {
             let clause: Vec<i32> = line
                 .split_whitespace()
@@ -353,7 +330,7 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 })
                 .filter(|&x| x != 0)
                 .collect();
-            LOG!("parsed clause: {:?}", clause);
+            LOG!(ctx, "parsed clause: {:?}", clause);
             ctx.formula.add_clause(clause);
             ctx.stats.parsed += 1;
         } else {
@@ -399,9 +376,23 @@ fn print(ctx: &mut SATContext) {
     }
 }
 
+fn forward_subsumption(ctx: &mut SATContext) {
+    verbose!(ctx, 1, "starting forward subsumption");
+}
+
+fn backward_subsumption(ctx: &mut SATContext) {
+    verbose!(ctx, 1, "starting backward subsumption");
+}
+
 fn simplify(ctx: &mut SATContext) {
     verbose!(ctx, 1, "starting to simplify formula");
+    if ctx.config.forward_mode {
+        forward_subsumption(ctx);
+    } else {
+        backward_subsumption(ctx);
+    }
     verbose!(ctx, 1, "simplification complete");
+    ctx.formula.collect_garbage_clauses();
 }
 
 fn main() {
@@ -426,6 +417,16 @@ fn main() {
                 .help("Increases verbosity level"),
         )
         .arg(Arg::new("quiet").short('q').help("Suppresses all output"))
+        .arg(
+            Arg::new("forward-mode")
+                .short('f')
+                .help("Enables forward subsumption"),
+        )
+        .arg(
+            Arg::new("backward-mode")
+                .short('b')
+                .help("Enables backward subsumption"),
+        )
         .arg(
             Arg::new("sign")
                 .short('s')
@@ -458,10 +459,15 @@ fn main() {
         *matches.get_one::<u8>("verbosity").unwrap_or(&0) as i32
     };
 
+    if matches.is_present("forward-mode") && matches.is_present("backward-mode") {
+        die!("Cannot enable both forward and backward subsumption");
+    }
+
     let config = Config {
         input_path: matches.value_of("input").unwrap_or("<stdin>").to_string(),
         output_path: matches.value_of("output").unwrap_or("<stdout>").to_string(),
         verbosity,
+        forward_mode: matches.is_present("forward-mode"),
         sign: matches.is_present("sign"),
     };
 
@@ -472,6 +478,7 @@ fn main() {
         die!("Failed to parse CNF: {}", e);
     }
 
+    simplify(&mut ctx);
     print(&mut ctx);
     report_stats(&mut ctx);
 }
