@@ -103,6 +103,12 @@ struct Stats {
 // TODO: The data structures right now are inefficient and need to be optimized. I will work on
 // this in the next few days. - Bernhard
 
+// Make invariant that clause id = clause idx
+// Clause must have: literals, garbage
+// have syntax formula.matrix[lit] to get a vector of clause ids
+// matxix is just a vector with added functionality
+// have no delete clause functionality
+// have functionality to remove all garbages and uphold the invariant
 struct Clause {
     id: usize,
     literals: Vec<i32>,
@@ -121,7 +127,7 @@ struct CNFFormula {
     variables: usize,
     added_clauses: usize,
     clauses: Vec<Clause>,
-    literal_matrix: HashMap<i32, Vec<usize>>,
+    matrix: HashMap<i32, Vec<usize>>,
 }
 
 impl CNFFormula {
@@ -130,7 +136,7 @@ impl CNFFormula {
             variables: 0,
             added_clauses: 0,
             clauses: Vec::new(),
-            literal_matrix: HashMap::new(),
+            matrix: HashMap::new(),
         }
     }
 
@@ -156,7 +162,7 @@ impl CNFFormula {
             new_clause.literals
         );
         for &literal in &new_clause.literals {
-            self.literal_matrix
+            self.matrix
                 .entry(literal)
                 .or_insert_with(Vec::new)
                 .push(clause_id);
@@ -178,7 +184,7 @@ impl CNFFormula {
             .unwrap_or_else(|| die!("clause id not found: {}", clause_id));
 
         for &literal in &self.clauses[clause_index].literals {
-            self.literal_matrix
+            self.matrix
                 .get_mut(&literal)
                 .unwrap()
                 .retain(|&id| id != clause_id); // Remove the clause ID
@@ -217,7 +223,7 @@ impl CNFFormula {
             clause_id,
             literal
         );
-        self.literal_matrix
+        self.matrix
             .get_mut(&literal)
             .unwrap()
             .retain(|&id| id != clause_id);
