@@ -1,9 +1,14 @@
+use bzip2;
+use bzip2::write::BzEncoder;
 use clap::{Arg, ArgAction, Command};
+use flate2;
+use flate2::write::GzEncoder;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::ops::{Index, IndexMut};
 use std::process;
 use std::time::Instant;
+use xz2::write::XzEncoder;
 
 macro_rules! die {
     ($($arg:tt)*) => {{
@@ -19,22 +24,6 @@ macro_rules! message {
             let stdout = io::stdout();
             let mut handle = stdout.lock();
             if let Err(e) = writeln!(handle, "{}", format!("c {}", format_args!($($arg)*))) {
-                die!("Failed to write message: {}", e);
-            }
-            if let Err(f) = handle.flush() {
-                die!("Failed to flush stdout: {}", f);
-            }
-        }
-    }}
-}
-
-macro_rules! raw_message {
-    ($verbosity:expr, $($arg:tt)*) => {{
-        use std::io::{self, Write};
-        if $verbosity >= 0 {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            if let Err(e) = writeln!(handle, "{}", format!("{}", format_args!($($arg)*))) {
                 die!("Failed to write message: {}", e);
             }
             if let Err(f) = handle.flush() {
@@ -138,9 +127,9 @@ impl Matrix {
         }
     }
 
-    fn init(&mut self, variables: usize, verbosity: i32) {
+    fn init(&mut self, variables: usize, _verbosity: i32) {
         LOG!(
-            verbosity,
+            _verbosity,
             "initializing matrix with {} variables",
             variables
         );
@@ -193,8 +182,8 @@ impl CNFFormula {
         }
     }
 
-    fn add_clause(&mut self, clause: Vec<i32>, verbosity: i32) {
-        LOG!(verbosity, "adding clause: {:?}", clause);
+    fn add_clause(&mut self, clause: Vec<i32>, _verbosity: i32) {
+        LOG!(_verbosity, "adding clause: {:?}", clause);
         let new_clause = Clause {
             garbage: false,
             literals: clause,
@@ -203,9 +192,9 @@ impl CNFFormula {
         self.clauses.push(new_clause);
     }
 
-    fn connect_lit(&mut self, lit: i32, clause_id: usize, verbosity: i32) {
+    fn connect_lit(&mut self, lit: i32, clause_id: usize, _verbosity: i32) {
         LOG!(
-            verbosity,
+            _verbosity,
             "connecting literal {} to clause {}",
             lit,
             clause_id
@@ -213,15 +202,15 @@ impl CNFFormula {
         self.matrix[lit].push(clause_id);
     }
 
-    fn connect_clause(&mut self, clause_id: usize, verbosity: i32) {
-        LOG!(verbosity, "connecting clause {}", clause_id);
+    fn connect_clause(&mut self, clause_id: usize, _verbosity: i32) {
+        LOG!(_verbosity, "connecting clause {}", clause_id);
         let clause = &self.clauses[clause_id].clone();
         for &lit in &clause.literals {
-            self.connect_lit(lit, clause_id, verbosity);
+            self.connect_lit(lit, clause_id, _verbosity);
         }
     }
 
-    fn collect_garbage_clauses(&mut self, verbosity: i32) {
+    fn collect_garbage_clauses(&mut self, _verbosity: i32) {
         let mut new_clauses = Vec::new();
         for clause in &self.clauses {
             if !clause.garbage {
@@ -229,7 +218,7 @@ impl CNFFormula {
             }
         }
         LOG!(
-            verbosity,
+            _verbosity,
             "collected garbage: {} clauses",
             self.clauses.len() - new_clauses.len()
         );
@@ -240,21 +229,14 @@ impl CNFFormula {
 struct SATContext {
     config: Config,
     formula: CNFFormula,
-    writer: BufWriter<Box<dyn Write>>,
     stats: Stats,
 }
 
 impl SATContext {
     fn new(config: Config) -> Self {
-        let output: Box<dyn Write> = match config.output_path.as_str() {
-            "<stdout>" => Box::new(io::stdout()),
-            path => Box::new(File::create(path).expect("Failed to create output file")),
-        };
-
         SATContext {
             config,
             formula: CNFFormula::new(),
-            writer: BufWriter::new(output),
             stats: Stats {
                 checked: 0,
                 parsed: 0,
@@ -394,32 +376,52 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
 }
 
 fn print(ctx: &mut SATContext) {
-    verbose!(
-        ctx.config.verbosity,
-        1,
-        "writing to '{}'",
-        ctx.config.output_path
-    );
-    if ctx.config.sign {
-        let signature = compute_signature(ctx);
-        message!(ctx.config.verbosity, "hash-signature: {}", signature);
-    }
+    let mut output: Box<dyn Write> = if ctx.config.output_path == "<stdout>" {
+        Box::new(io::stdout())
+    } else {
+        match ctx.config.output_path.as_str() {
+            path if path.ends_with(".bz2") => {
+                let file = File::create(path).expect("Failed to create output file");
+                Box::new(BzEncoder::new(file, bzip2::Compression::default()))
+            }
+            path if path.ends_with(".gz") => {
+                let file = File::create(path).expect("Failed to create output file");
+                Box::new(GzEncoder::new(file, flate2::Compression::default()))
+            }
+            path if path.ends_with(".xz") => {
+                let file = File::create(path).expect("Failed to create output file");
+                Box::new(XzEncoder::new(file, 6)) // Compression level set to 6
+            }
+            path => Box::new(File::create(path).expect("Failed to create output file")),
+        }
+    };
 
-    raw_message!(
-        ctx.config.verbosity,
+    writeln!(
+        output,
         "p cnf {} {}",
         ctx.formula.variables,
         ctx.formula.clauses.len()
-    );
+    )
+    .expect("Failed to write CNF header");
+
+    if ctx.config.sign {
+        let signature = compute_signature(ctx);
+        writeln!(output, "c signature: {}", signature).expect("Failed to write signature");
+    }
+
     for clause in &ctx.formula.clauses {
-        let clause_string = clause
+        let literals = clause
             .literals
             .iter()
-            .map(|&lit| lit.to_string())
+            .map(|lit| lit.to_string())
             .collect::<Vec<String>>()
-            .join(" ")
-            + " 0";
-        raw_message!(ctx.config.verbosity, "{}", clause_string); // TODO: Fix this
+            .join(" ");
+        writeln!(output, "{} 0", literals).expect("Failed to write clause");
+    }
+
+    match output.flush() {
+        Ok(_) => (),
+        Err(e) => die!("Failed to flush output: {}", e),
     }
 }
 
