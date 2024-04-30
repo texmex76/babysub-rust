@@ -1,13 +1,17 @@
 use bzip2;
+use bzip2::read::BzDecoder;
 use bzip2::write::BzEncoder;
 use clap::{Arg, ArgAction, Command};
 use flate2;
+use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::ops::{Index, IndexMut};
+use std::path::Path;
 use std::process;
 use std::time::Instant;
+use xz2::read::XzDecoder;
 use xz2::write::XzEncoder;
 
 macro_rules! die {
@@ -299,12 +303,26 @@ fn compute_signature(ctx: &mut SATContext) -> u64 {
 }
 
 fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
+    let path = Path::new(&input_path);
     let input: Box<dyn Read> = if input_path == "<stdin>" {
         message!(ctx.config.verbosity, "reading from '<stdin>'");
         Box::new(io::stdin())
     } else {
         message!(ctx.config.verbosity, "reading from '{}'", input_path);
-        Box::new(File::open(&input_path)?)
+        let file = File::open(&input_path)?;
+        if path.extension().unwrap() == "bz2" {
+            LOG!(ctx.config.verbosity, "reading BZ2 compressed file");
+            Box::new(BzDecoder::new(file))
+        } else if path.extension().unwrap() == "gz" {
+            LOG!(ctx.config.verbosity, "reading GZ compressed file");
+            Box::new(GzDecoder::new(file))
+        } else if path.extension().unwrap() == "xz" {
+            LOG!(ctx.config.verbosity, "reading XZ compressed file");
+            Box::new(XzDecoder::new(file))
+        } else {
+            LOG!(ctx.config.verbosity, "reading uncompressed file");
+            Box::new(file)
+        }
     };
 
     let reader = BufReader::new(input);
