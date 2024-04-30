@@ -115,19 +115,24 @@ struct Stats {
 #[derive(Debug, Clone)]
 struct Clause {
     garbage: bool,
+    // The clause id is just the index in the formula's clauses vector
     literals: Vec<i32>,
 }
 
 struct Matrix {
     matrix: Vec<Vec<usize>>,
-    offset: usize,
 }
 
 impl Matrix {
     fn new() -> Self {
-        Matrix {
-            matrix: Vec::new(),
-            offset: 0,
+        Matrix { matrix: Vec::new() }
+    }
+
+    fn map_literal_to_index(&self, literal: i32) -> usize {
+        if literal < 0 {
+            (-literal * 2 - 2) as usize
+        } else {
+            (literal * 2 - 1) as usize
         }
     }
 
@@ -137,33 +142,32 @@ impl Matrix {
             "initializing matrix with {} variables",
             variables
         );
-        let size = 2 * variables + 1;
+        let size = 2 * variables;
         self.matrix = vec![vec![0; size]; size];
-        self.offset = variables;
     }
 }
 
 impl Index<i32> for Matrix {
     type Output = Vec<usize>;
 
-    fn index(&self, index: i32) -> &Self::Output {
-        let computed_index = self.offset as i32 + index;
+    fn index(&self, literal: i32) -> &Self::Output {
+        let computed_index = self.map_literal_to_index(literal);
         assert!(
-            computed_index >= 0 && computed_index < self.matrix.len() as i32,
+            computed_index < self.matrix.len(),
             "Matrix index out of bounds"
         );
-        &self.matrix[computed_index as usize]
+        &self.matrix[computed_index]
     }
 }
 
 impl IndexMut<i32> for Matrix {
-    fn index_mut(&mut self, index: i32) -> &mut Self::Output {
-        let computed_index = self.offset as i32 + index;
+    fn index_mut(&mut self, literal: i32) -> &mut Self::Output {
+        let computed_index = self.map_literal_to_index(literal);
         assert!(
-            computed_index >= 0 && computed_index < self.matrix.len() as i32,
+            computed_index < self.matrix.len(),
             "Matrix index out of bounds"
         );
-        &mut self.matrix[computed_index as usize]
+        &mut self.matrix[computed_index]
     }
 }
 
