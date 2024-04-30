@@ -129,6 +129,8 @@ impl Matrix {
     }
 
     fn map_literal_to_index(&self, literal: i32) -> usize {
+        // Optimization for matrix indexing
+        // With this, lit and -lit will be next to each other
         if literal < 0 {
             (-literal * 2 - 2) as usize
         } else {
@@ -466,7 +468,7 @@ fn simplify(ctx: &mut SATContext) {
     ctx.formula.collect_garbage_clauses(ctx.config.verbosity);
 }
 
-fn main() {
+fn parse_arguments() -> Config {
     let app = Command::new("BabySub")
         .version("1.0")
         .author("Bernhard Gstrein")
@@ -534,16 +536,24 @@ fn main() {
         die!("Cannot enable both forward and backward subsumption");
     }
 
-    let config = Config {
+    Config {
         input_path: matches.value_of("input").unwrap_or("<stdin>").to_string(),
         output_path: matches.value_of("output").unwrap_or("<stdout>").to_string(),
         verbosity,
         forward_mode: matches.is_present("forward-mode"),
         sign: matches.is_present("sign"),
-    };
+    }
+}
 
-    let mut ctx = SATContext::new(config);
+fn setup_context(config: Config) -> SATContext {
+    let ctx = SATContext::new(config);
     message!(ctx.config.verbosity, "BabySub Subsumption Preprocessor");
+    ctx
+}
+
+fn main() {
+    let config = parse_arguments();
+    let mut ctx = setup_context(config);
 
     if let Err(e) = parse_cnf(ctx.config.input_path.clone(), &mut ctx) {
         die!("Failed to parse CNF: {}", e);
