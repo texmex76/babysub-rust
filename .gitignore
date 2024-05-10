@@ -1,2 +1,4 @@
 target
 testy
+*.log
+*.out

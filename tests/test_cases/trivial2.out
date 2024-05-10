@@ -1,11 +1,3 @@
-c BabySub Subsumption Preprocessor
-c reading from '/home/gstrein/Documents/repos/babysub-rust/tests/test_cases/trivial2.golden'
-c parsed 'p cnf 2 1' header
-c tmp: 3450056017
-c tmp: 2221466251909025616
-c hash-signature: 1653562859555728976
 p cnf 2 1
+c hash-signature: 1653562859555728976
 1 -2 0
-c checked:                      0    clauses 0.00 per subsumed
-c subsumed:                     0    clauses 0%
-c process-time:                 0.00 seconds

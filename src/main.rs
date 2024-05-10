@@ -89,7 +89,7 @@ struct Config {
     input_path: String,
     output_path: String,
     verbosity: i32,
-    forward_mode: bool,
+    backward_mode: bool,
     sign: bool,
 }
 
@@ -547,7 +547,7 @@ fn print(ctx: &mut SATContext) {
 
     if ctx.config.sign {
         let signature = compute_signature(ctx);
-        writeln!(output, "c signature: {}", signature).expect("Failed to write signature");
+        writeln!(output, "c hash-signature: {}", signature).expect("Failed to write signature");
     }
 
     for clause in &ctx.formula.clauses {
@@ -602,7 +602,7 @@ fn forward_subsumed(ctx: &mut SATContext, clause_id: usize) -> bool {
                     continue 'inner;
                 }
             }
-            LOG!(ctx.config.verborsity, "subsuming clause {:?}", d);
+            LOG!(ctx.config.verbosity, "subsuming clause {:?}", d);
             LOG!(ctx.config.verbosity, "subsumed clause {:?}", clause);
 
             ctx.formula.clauses[clause_id].garbage = true;
@@ -615,9 +615,52 @@ fn forward_subsumed(ctx: &mut SATContext, clause_id: usize) -> bool {
     ctx.formula.clauses[clause_id].garbage
 }
 
+fn occurrences(ctx: &SATContext, lit: i32) -> usize {
+    ctx.formula.matrix[lit].len()
+}
+
+fn least_occuring(ctx: &SATContext, clause_id: usize, min_occs_ext: &mut usize) -> i32 {
+    let clause = &ctx.formula.clauses[clause_id];
+    let mut min_lit = 0;
+    let mut min_occs = usize::MAX;
+
+    for &lit in &clause.literals {
+        let occs = occurrences(ctx, lit);
+        if occs < min_occs {
+            min_occs = occs;
+            min_lit = lit;
+            if occs == 0 {
+                break;
+            }
+        }
+    }
+
+    LOG!(
+        ctx.config.verbosity,
+        "literal {} connected {} times",
+        min_lit,
+        min_occs
+    );
+
+    *min_occs_ext = min_occs;
+    min_lit
+}
+
+fn connect_least_occuring(ctx: &mut SATContext, clause_id: usize) {
+    let min_occs = &mut 0;
+    let lit = least_occuring(ctx, clause_id, min_occs);
+    ctx.formula
+        .connect_lit(lit, clause_id, ctx.config.verbosity);
+}
+
 fn forward_subsumption(ctx: &mut SATContext) {
     verbose!(ctx.config.verbosity, 1, "starting forward subsumption");
     ctx.formula.sort_clauses_forward();
+    for clause_id in 0..ctx.formula.clauses.len() {
+        if !forward_subsumed(ctx, clause_id) {
+            connect_least_occuring(ctx, clause_id);
+        }
+    }
 }
 
 fn backward_subsumption(ctx: &mut SATContext) {
@@ -629,10 +672,10 @@ fn simplify(ctx: &mut SATContext) {
         let_empty_clause_subsume_all_clauses(ctx);
     } else {
         verbose!(ctx.config.verbosity, 1, "starting to simplify formula");
-        if ctx.config.forward_mode {
-            forward_subsumption(ctx);
-        } else {
+        if ctx.config.backward_mode {
             backward_subsumption(ctx);
+        } else {
+            forward_subsumption(ctx);
         }
         verbose!(ctx.config.verbosity, 1, "simplification complete");
         ctx.formula.collect_garbage_clauses(ctx.config.verbosity);
@@ -711,7 +754,7 @@ fn parse_arguments() -> Config {
         input_path: matches.value_of("input").unwrap_or("<stdin>").to_string(),
         output_path: matches.value_of("output").unwrap_or("<stdout>").to_string(),
         verbosity,
-        forward_mode: matches.is_present("forward-mode"),
+        backward_mode: matches.is_present("backward-mode"),
         sign: matches.is_present("sign"),
     }
 }

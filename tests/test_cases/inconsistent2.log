@@ -1,0 +1,6 @@
+c BabySub Subsumption Preprocessor
+c reading from '/home/gstrein/Documents/repos/babysub-rust/tests/test_cases/inconsistent2.cnf'
+c parsed 'p cnf 4 4' header
+c checked:                      0    clauses 1.00 per subsumed
+c subsumed:                     3    clauses 75%
+c process-time:                 0.00 seconds
