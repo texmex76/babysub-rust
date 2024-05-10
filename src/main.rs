@@ -317,6 +317,33 @@ impl CNFFormula {
             .map(|(_, clause)| clause.clone())
             .collect();
     }
+
+    fn sort_clauses_backward(&mut self) {
+        // Create a temporary vector of tuples containing the original index and references to the clauses
+        let mut indexed_clauses: Vec<(usize, &Clause)> = self
+            .clauses
+            .iter()
+            .enumerate()
+            .map(|(index, clause)| (index, clause))
+            .collect();
+
+        // Sort the indexed_clauses based on size first, and then by the original index if sizes are equal
+        indexed_clauses.sort_by(|(idx_a, a), (idx_b, b)| {
+            let size_a = a.literals.len();
+            let size_b = b.literals.len();
+            if size_a == size_b {
+                idx_b.cmp(idx_a)
+            } else {
+                size_b.cmp(&size_a)
+            }
+        });
+
+        // Reconstruct the clauses vector in the new order
+        self.clauses = indexed_clauses
+            .into_iter()
+            .map(|(_, clause)| clause.clone())
+            .collect();
+    }
 }
 
 struct SATContext {
@@ -663,8 +690,56 @@ fn forward_subsumption(ctx: &mut SATContext) {
     }
 }
 
+fn backward_subsume(ctx: &mut SATContext, clause_id: usize) {
+    LOG!(
+        ctx.config.verbosity,
+        "backward subsuming clause {}",
+        clause_id
+    );
+    let mut min_occs = usize::MAX;
+    let min_lit = least_occuring(ctx, clause_id, &mut min_occs);
+    if min_lit == 0 {
+        return;
+    }
+    if min_occs == 0 {
+        return;
+    }
+    mark_clause(ctx, clause_id);
+    let c = &ctx.formula.clauses[clause_id].clone();
+    for &d_id in &ctx.formula.matrix[min_lit] {
+        ctx.stats.checked += 1;
+        let d = &ctx.formula.clauses[d_id];
+        if d.garbage {
+            continue;
+        }
+        assert!(c.literals.len() <= d.literals.len());
+        let mut marked = 0;
+        for &lit in &d.literals {
+            if ctx.formula.marks.is_marked(lit) {
+                marked += 1;
+                if marked == c.literals.len() {
+                    break;
+                }
+            }
+        }
+        if marked < c.literals.len() {
+            continue;
+        }
+        assert!(marked == c.literals.len());
+        LOG!(ctx.config.verbosity, "backward subsumed {:?}", d);
+        ctx.formula.clauses[d_id].garbage = true;
+        ctx.stats.subsumed += 1;
+    }
+    unmark_clause(ctx, clause_id);
+}
+
 fn backward_subsumption(ctx: &mut SATContext) {
     verbose!(ctx.config.verbosity, 1, "starting backward subsumption");
+    ctx.formula.sort_clauses_backward();
+    for clause_id in 0..ctx.formula.clauses.len() {
+        backward_subsume(ctx, clause_id);
+        ctx.formula.connect_clause(clause_id, ctx.config.verbosity);
+    }
 }
 
 fn simplify(ctx: &mut SATContext) {

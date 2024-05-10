@@ -2,3 +2,4 @@ target
 testy
 *.log
 *.out
+tests/sc2016
