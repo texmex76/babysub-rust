@@ -588,9 +588,31 @@ fn unmark_clause(ctx: &mut SATContext, clause_id: usize) {
 
 fn forward_subsumed(ctx: &mut SATContext, clause_id: usize) -> bool {
     mark_clause(ctx, clause_id);
-    let mut subsumed = false;
+    let clause = &ctx.formula.clauses[clause_id];
 
-    return subsumed;
+    'outer: for &lit in &clause.literals {
+        'inner: for &d_id in &ctx.formula.matrix[lit] {
+            let d = &ctx.formula.clauses[d_id];
+            assert!(clause.literals.len() >= d.literals.len());
+            assert!(!d.garbage);
+            ctx.stats.checked += 1;
+
+            for &other in &d.literals {
+                if !ctx.formula.marks.is_marked(other) {
+                    continue 'inner;
+                }
+            }
+            LOG!(ctx.config.verborsity, "subsuming clause {:?}", d);
+            LOG!(ctx.config.verbosity, "subsumed clause {:?}", clause);
+
+            ctx.formula.clauses[clause_id].garbage = true;
+            ctx.stats.subsumed += 1;
+            break 'outer;
+        }
+    }
+
+    unmark_clause(ctx, clause_id);
+    ctx.formula.clauses[clause_id].garbage
 }
 
 fn forward_subsumption(ctx: &mut SATContext) {
