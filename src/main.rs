@@ -362,6 +362,29 @@ fn compute_signature(ctx: &mut SATContext) -> u64 {
     hash
 }
 
+fn check_trivial_and_process_clause(marks: &mut Marks, clause: Vec<i32>) -> (bool, Vec<i32>) {
+    let mut is_trivial = false;
+    let mut processed_clause = Vec::new();
+
+    for &lit in &clause {
+        if marks.is_marked(lit) {
+            continue; // Skip duplicates
+        }
+        if marks.is_marked(-lit) {
+            is_trivial = true;
+            break; // Found trivial condition
+        }
+        marks.mark(lit);
+        processed_clause.push(lit);
+    }
+
+    for &lit in &processed_clause {
+        marks.unmark(lit);
+    }
+
+    (is_trivial, processed_clause)
+}
+
 fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
     let path = Path::new(&input_path);
     let input: Box<dyn Read> = if input_path == "<stdin>" {
@@ -431,21 +454,17 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 .filter(|&x| x != 0)
                 .collect();
             LOG!(ctx.config.verbosity, "parsed clause: {:?}", clause);
-            ctx.formula.add_clause(clause, ctx.config.verbosity);
             ctx.stats.parsed += 1;
+            let (is_trivial, clause) =
+                check_trivial_and_process_clause(&mut ctx.formula.marks, clause);
+            if is_trivial {
+                verbose!(ctx.config.verbosity, 2, "skipping trivial clause");
+                continue;
+            }
+            ctx.formula.add_clause(clause, ctx.config.verbosity);
         } else {
             parse_error!(ctx, "CNF header not found.", line_number);
         }
-    }
-    if clauses_count != ctx.stats.parsed {
-        parse_error!(
-            ctx,
-            format!(
-                "Mismatch in declared and parsed clauses: expected {}, got {}",
-                clauses_count, ctx.stats.parsed
-            ),
-            line_number
-        );
     }
     verbose!(
         ctx.config.verbosity,
