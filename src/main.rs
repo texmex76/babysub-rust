@@ -144,8 +144,7 @@ impl Matrix {
             "initializing matrix with {} variables",
             variables
         );
-        let size = 2 * variables;
-        self.matrix = vec![Vec::new(); size];
+        self.matrix = vec![Vec::new(); 2 * variables];
     }
 }
 
@@ -173,12 +172,67 @@ impl IndexMut<i32> for Matrix {
     }
 }
 
+struct Marks {
+    marks: Vec<bool>,
+}
+
+impl Marks {
+    fn new() -> Self {
+        Marks { marks: Vec::new() }
+    }
+
+    fn map_literal_to_index(&self, literal: i32) -> usize {
+        // Optimization for indexing
+        // With this, lit and -lit will be next to each other
+        if literal < 0 {
+            (-literal * 2 - 2) as usize
+        } else {
+            (literal * 2 - 1) as usize
+        }
+    }
+    fn init(&mut self, variables: usize, _verbosity: i32) {
+        LOG!(
+            _verbosity,
+            "initializing marks with {} variables",
+            variables
+        );
+        self.marks = vec![false; 2 * variables];
+    }
+
+    fn mark(&mut self, literal: i32) {
+        let computed_index = self.map_literal_to_index(literal);
+        assert!(
+            computed_index < self.marks.len(),
+            "Marks index out of bounds"
+        );
+        self.marks[computed_index] = true;
+    }
+
+    fn unmark(&mut self, literal: i32) {
+        let computed_index = self.map_literal_to_index(literal);
+        assert!(
+            computed_index < self.marks.len(),
+            "Marks index out of bounds"
+        );
+        self.marks[computed_index] = false;
+    }
+
+    fn is_marked(&self, literal: i32) -> bool {
+        let computed_index = self.map_literal_to_index(literal);
+        assert!(
+            computed_index < self.marks.len(),
+            "Marks index out of bounds"
+        );
+        self.marks[computed_index]
+    }
+}
+
 struct CNFFormula {
     variables: usize,
     added_clauses: usize,
     clauses: Vec<Clause>,
     matrix: Matrix,
-    marks: Vec<bool>,
+    marks: Marks,
 }
 
 impl CNFFormula {
@@ -188,7 +242,7 @@ impl CNFFormula {
             added_clauses: 0,
             clauses: Vec::new(),
             matrix: Matrix::new(),
-            marks: Vec::new(),
+            marks: Marks::new(),
         }
     }
 
@@ -350,6 +404,9 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
             ctx.formula.variables = parts[2].parse().unwrap_or_else(|_| {
                 parse_error!(ctx, "Could not read number of variables.", line_number);
             });
+            ctx.formula
+                .marks
+                .init(ctx.formula.variables, ctx.config.verbosity);
             clauses_count = parts[3].parse().unwrap_or_else(|_| {
                 parse_error!(ctx, "Could not read number of clauses.", line_number);
             });
