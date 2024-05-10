@@ -112,7 +112,7 @@ struct Stats {
     start_time: Instant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Clause {
     garbage: bool,
     // The clause id is just the index in the formula's clauses vector
@@ -231,6 +231,7 @@ struct CNFFormula {
     variables: usize,
     added_clauses: usize,
     clauses: Vec<Clause>,
+    empty_clause_exists: bool,
     matrix: Matrix,
     marks: Marks,
 }
@@ -241,6 +242,7 @@ impl CNFFormula {
             variables: 0,
             added_clauses: 0,
             clauses: Vec::new(),
+            empty_clause_exists: false,
             matrix: Matrix::new(),
             marks: Marks::new(),
         }
@@ -287,6 +289,33 @@ impl CNFFormula {
             self.clauses.len() - new_clauses.len()
         );
         self.clauses = new_clauses;
+    }
+
+    fn sort_clauses_forward(&mut self) {
+        // Create a temporary vector of tuples containing the original index and references to the clauses
+        let mut indexed_clauses: Vec<(usize, &Clause)> = self
+            .clauses
+            .iter()
+            .enumerate()
+            .map(|(index, clause)| (index, clause))
+            .collect();
+
+        // Sort the indexed_clauses based on size first, and then by the original index if sizes are equal
+        indexed_clauses.sort_by(|(idx_a, a), (idx_b, b)| {
+            let size_a = a.literals.len();
+            let size_b = b.literals.len();
+            if size_a == size_b {
+                idx_a.cmp(idx_b)
+            } else {
+                size_a.cmp(&size_b)
+            }
+        });
+
+        // Reconstruct the clauses vector in the new order
+        self.clauses = indexed_clauses
+            .into_iter()
+            .map(|(_, clause)| clause.clone())
+            .collect();
     }
 }
 
@@ -410,7 +439,6 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
 
     let reader = BufReader::new(input);
     let mut header_parsed = false;
-    let mut clauses_count = 0;
     let mut line_number = 0;
 
     for line in reader.lines() {
@@ -430,9 +458,10 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
             ctx.formula
                 .marks
                 .init(ctx.formula.variables, ctx.config.verbosity);
-            clauses_count = parts[3].parse().unwrap_or_else(|_| {
-                parse_error!(ctx, "Could not read number of clauses.", line_number);
-            });
+            let clauses_count: usize = match parts[3].parse() {
+                Ok(num) => num,
+                Err(_) => parse_error!(ctx, "Could not read number of clauses.", line_number),
+            };
             header_parsed = true;
             message!(
                 ctx.config.verbosity,
@@ -461,6 +490,18 @@ fn parse_cnf(input_path: String, ctx: &mut SATContext) -> io::Result<()> {
                 verbose!(ctx.config.verbosity, 2, "skipping trivial clause");
                 continue;
             }
+            if clause.is_empty() {
+                ctx.formula.empty_clause_exists = true;
+                verbose!(ctx.config.verbosity, 2, "found empty clause");
+            }
+            // commented out for speed
+            // Let's hope there are no duplicate clauses in the benchmarks
+            // for c in &ctx.formula.clauses {
+            //     if c.literals == clause {
+            //         verbose!(ctx.config.verbosity, 2, "skipping duplicate clause");
+            //         continue;
+            //     }
+            // }
             ctx.formula.add_clause(clause, ctx.config.verbosity);
         } else {
             parse_error!(ctx, "CNF header not found.", line_number);
@@ -525,8 +566,36 @@ fn print(ctx: &mut SATContext) {
     }
 }
 
+fn let_empty_clause_subsume_all_clauses(ctx: &mut SATContext) {
+    ctx.formula.clauses = vec![Clause {
+        garbage: false,
+        literals: Vec::new(),
+    }];
+    ctx.stats.subsumed = ctx.formula.added_clauses - 1;
+}
+
+fn mark_clause(ctx: &mut SATContext, clause_id: usize) {
+    for &lit in &ctx.formula.clauses[clause_id].literals {
+        ctx.formula.marks.mark(lit);
+    }
+}
+
+fn unmark_clause(ctx: &mut SATContext, clause_id: usize) {
+    for &lit in &ctx.formula.clauses[clause_id].literals {
+        ctx.formula.marks.unmark(lit);
+    }
+}
+
+fn forward_subsumed(ctx: &mut SATContext, clause_id: usize) -> bool {
+    mark_clause(ctx, clause_id);
+    let mut subsumed = false;
+
+    return subsumed;
+}
+
 fn forward_subsumption(ctx: &mut SATContext) {
     verbose!(ctx.config.verbosity, 1, "starting forward subsumption");
+    ctx.formula.sort_clauses_forward();
 }
 
 fn backward_subsumption(ctx: &mut SATContext) {
@@ -534,14 +603,18 @@ fn backward_subsumption(ctx: &mut SATContext) {
 }
 
 fn simplify(ctx: &mut SATContext) {
-    verbose!(ctx.config.verbosity, 1, "starting to simplify formula");
-    if ctx.config.forward_mode {
-        forward_subsumption(ctx);
+    if ctx.formula.empty_clause_exists {
+        let_empty_clause_subsume_all_clauses(ctx);
     } else {
-        backward_subsumption(ctx);
+        verbose!(ctx.config.verbosity, 1, "starting to simplify formula");
+        if ctx.config.forward_mode {
+            forward_subsumption(ctx);
+        } else {
+            backward_subsumption(ctx);
+        }
+        verbose!(ctx.config.verbosity, 1, "simplification complete");
+        ctx.formula.collect_garbage_clauses(ctx.config.verbosity);
     }
-    verbose!(ctx.config.verbosity, 1, "simplification complete");
-    ctx.formula.collect_garbage_clauses(ctx.config.verbosity);
 }
 
 fn parse_arguments() -> Config {
