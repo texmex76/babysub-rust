@@ -3,3 +3,4 @@ testy
 *.log
 *.out
 tests/sc2016
+tests/bench.txt
