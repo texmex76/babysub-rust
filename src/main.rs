@@ -290,60 +290,6 @@ impl CNFFormula {
         );
         self.clauses = new_clauses;
     }
-
-    fn sort_clauses_forward(&mut self) {
-        // Create a temporary vector of tuples containing the original index and references to the clauses
-        let mut indexed_clauses: Vec<(usize, &Clause)> = self
-            .clauses
-            .iter()
-            .enumerate()
-            .map(|(index, clause)| (index, clause))
-            .collect();
-
-        // Sort the indexed_clauses based on size first, and then by the original index if sizes are equal
-        indexed_clauses.sort_by(|(idx_a, a), (idx_b, b)| {
-            let size_a = a.literals.len();
-            let size_b = b.literals.len();
-            if size_a == size_b {
-                idx_a.cmp(idx_b)
-            } else {
-                size_a.cmp(&size_b)
-            }
-        });
-
-        // Reconstruct the clauses vector in the new order
-        self.clauses = indexed_clauses
-            .into_iter()
-            .map(|(_, clause)| clause.clone())
-            .collect();
-    }
-
-    fn sort_clauses_backward(&mut self) {
-        // Create a temporary vector of tuples containing the original index and references to the clauses
-        let mut indexed_clauses: Vec<(usize, &Clause)> = self
-            .clauses
-            .iter()
-            .enumerate()
-            .map(|(index, clause)| (index, clause))
-            .collect();
-
-        // Sort the indexed_clauses based on size first, and then by the original index if sizes are equal
-        indexed_clauses.sort_by(|(idx_a, a), (idx_b, b)| {
-            let size_a = a.literals.len();
-            let size_b = b.literals.len();
-            if size_a == size_b {
-                idx_b.cmp(idx_a)
-            } else {
-                size_b.cmp(&size_a)
-            }
-        });
-
-        // Reconstruct the clauses vector in the new order
-        self.clauses = indexed_clauses
-            .into_iter()
-            .map(|(_, clause)| clause.clone())
-            .collect();
-    }
 }
 
 struct SATContext {
@@ -682,7 +628,10 @@ fn connect_least_occuring(ctx: &mut SATContext, clause_id: usize) {
 
 fn forward_subsumption(ctx: &mut SATContext) {
     verbose!(ctx.config.verbosity, 1, "starting forward subsumption");
-    ctx.formula.sort_clauses_forward();
+    // sort ascending by clause size
+    ctx.formula
+        .clauses
+        .sort_by(|c1, c2| c1.literals.len().cmp(&c2.literals.len()));
     for clause_id in 0..ctx.formula.clauses.len() {
         if !forward_subsumed(ctx, clause_id) {
             connect_least_occuring(ctx, clause_id);
@@ -735,7 +684,10 @@ fn backward_subsume(ctx: &mut SATContext, clause_id: usize) {
 
 fn backward_subsumption(ctx: &mut SATContext) {
     verbose!(ctx.config.verbosity, 1, "starting backward subsumption");
-    ctx.formula.sort_clauses_backward();
+    // sort descending by clause size
+    ctx.formula
+        .clauses
+        .sort_by(|c1, c2| c1.literals.len().cmp(&c2.literals.len()).reverse());
     for clause_id in 0..ctx.formula.clauses.len() {
         backward_subsume(ctx, clause_id);
         ctx.formula.connect_clause(clause_id, ctx.config.verbosity);

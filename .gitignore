@@ -2,5 +2,9 @@ target
 testy
 *.log
 *.out
+*.err
 tests/sc2016
 tests/bench.txt
+tests/bench_home.txt
+tests/output.png
+tests/sc2016.zip
