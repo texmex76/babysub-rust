@@ -1,6 +1,0 @@
-c BabySub Subsumption Preprocessor
-c reading from '/home/gstrein/Documents/repos/babysub-rust/tests/test_cases/trivial1.cnf'
-c parsed 'p cnf 1 1' header
-c checked:                      0    clauses 0.00 per subsumed
-c subsumed:                     0    clauses 0%
-c process-time:                 0.00 seconds
