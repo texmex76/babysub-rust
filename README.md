@@ -1,10 +1,6 @@
 # babysub-rust
 
-This is the Rust template for the SAT preprocessor exercise.
-
-The data structures are not as refined as in the C++ equivalent, so expect slower performance. I will try to improve them.
-
-If you have any suggestions or find some bugs, pull requests are welcome!
+An educational SAT preprocessor written in Rust.
 
 # Running
 
